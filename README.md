@@ -5,8 +5,10 @@ Trabajo Práctico Especial — Protocolos de Comunicación (72.07), ITBA, 2026/1
 Servidor proxy **SOCKS5 (RFC1928)** con autenticación usuario/contraseña (RFC1929), protocolo de
 monitoreo/configuración propio, cliente de monitoreo y métricas.
 
-> Estado: **scaffold inicial** (Fase 0). La lógica de SOCKS5 y el protocolo de monitoreo se
-> implementan en las fases siguientes (ver `../tpe/plan.md` en el repo de estudio).
+> Estado: **Fase 1 — SOCKS5 core**. Proxy CONNECT funcional con autenticación user/pass (RFC1929),
+> destinos IPv4/IPv6/FQDN, iteración de IPs (RF4), reply codes completos (RF5) y relay bidireccional
+> no bloqueante. El protocolo de monitoreo y el cliente llegan en fases siguientes (ver
+> `../tpe/plan.md` en el repo de estudio).
 
 ## Compilación
 
