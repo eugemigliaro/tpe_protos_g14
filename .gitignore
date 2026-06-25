@@ -1,0 +1,11 @@
+# Artefactos de build
+bin/
+obj/
+*.o
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
