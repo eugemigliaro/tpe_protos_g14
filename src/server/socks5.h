@@ -3,6 +3,7 @@
 
 #include <netdb.h>
 #include <sys/socket.h>
+#include <time.h>
 
 #include "args.h"
 #include "selector.h"  /* antes que stm.h: define struct selector_key */
@@ -16,6 +17,9 @@
 
 /* Tamaño de los buffers de I/O por sentido (bytes). */
 #define SOCKS5_BUFFER_SIZE 4096
+
+/* Segundos de inactividad tras los cuales una conexión se cierra por timeout. */
+#define SOCKS5_IDLE_TIMEOUT 60
 
 /* Estados de la máquina; el orden debe coincidir con la tabla en socks5.c. */
 enum socks_state {
@@ -89,6 +93,12 @@ struct socks5 {
     unsigned references;
     /* Free-list del pool de conexiones. */
     struct socks5 *next;
+
+    /* --- Fase 2: timeout de inactividad y listado de conexiones activas --- */
+    time_t last_activity;         /* último evento de I/O; base del timeout */
+    bool   resolving;             /* true mientras corre el thread de getaddrinfo */
+    struct socks5 *active_prev;   /* lista doblemente enlazada de conexiones activas */
+    struct socks5 *active_next;
 };
 
 /** Acceso al estado adjunto desde los callbacks del selector. */
@@ -109,6 +119,12 @@ selector_status socks5_register_origin(struct selector_key *key,
 
 /** Libera el pool de conexiones reutilizables. */
 void socks5_pool_destroy(void);
+
+/** Cantidad de conexiones activas (para el apagado controlado — RF9). */
+unsigned socks5_active_connections(void);
+
+/** Cierra las conexiones inactivas por más de SOCKS5_IDLE_TIMEOUT segundos. */
+void socks5_sweep_timeouts(fd_selector s, time_t now);
 
 /** Configuración global (solo lectura) para validar usuarios. */
 const struct socks5args *socks5_config(void);

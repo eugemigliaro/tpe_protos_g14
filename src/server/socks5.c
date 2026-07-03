@@ -7,6 +7,7 @@
  */
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "socks5.h"
@@ -19,6 +20,43 @@ static const struct socks5args *config = NULL;
 /* Free-list de structs socks5 reutilizables. */
 static struct socks5 *pool      = NULL;
 static unsigned       pool_size = 0;
+
+/* Lista de conexiones activas (para timeouts y apagado controlado). */
+static struct socks5 *active_list  = NULL;
+static unsigned       active_count = 0;
+
+static void
+active_add(struct socks5 *s)
+{
+    s->active_prev = NULL;
+    s->active_next = active_list;
+    if (active_list != NULL) {
+        active_list->active_prev = s;
+    }
+    active_list = s;
+    active_count++;
+}
+
+static void
+active_remove(struct socks5 *s)
+{
+    if (s->active_prev != NULL) {
+        s->active_prev->active_next = s->active_next;
+    } else {
+        active_list = s->active_next;
+    }
+    if (s->active_next != NULL) {
+        s->active_next->active_prev = s->active_prev;
+    }
+    s->active_prev = s->active_next = NULL;
+    active_count--;
+}
+
+unsigned
+socks5_active_connections(void)
+{
+    return active_count;
+}
 
 /* --- declaración adelantada de la tabla de estados --- */
 static const struct state_definition *socks5_describe_states(void);
@@ -65,6 +103,10 @@ socks5_new(int client_fd)
 
     buffer_init(&s->read_buffer,  SOCKS5_BUFFER_SIZE, s->raw_read);
     buffer_init(&s->write_buffer, SOCKS5_BUFFER_SIZE, s->raw_write);
+
+    s->last_activity = time(NULL);
+    s->resolving     = false;
+    active_add(s);
     return s;
 }
 
@@ -79,6 +121,7 @@ socks5_destroy(struct socks5 *s)
         return;
     }
     /* última referencia: liberar recursos y volver al pool */
+    active_remove(s);
     if (s->origin_resolution != NULL) {
         freeaddrinfo(s->origin_resolution);
         s->origin_resolution = NULL;
@@ -117,9 +160,37 @@ socks5_done(struct selector_key *key)
     }
 }
 
+/* Cierra una conexión desde afuera de sus handlers (barrido de timeouts). */
+static void
+socks5_kill(fd_selector s, struct socks5 *cs)
+{
+    const int fds[] = { cs->client_fd, cs->origin_fd };
+    for (unsigned i = 0; i < 2; i++) {
+        if (fds[i] != -1) {
+            selector_unregister_fd(s, fds[i]); /* dispara handle_close -> destroy */
+            close(fds[i]);
+        }
+    }
+}
+
+void
+socks5_sweep_timeouts(fd_selector s, time_t now)
+{
+    struct socks5 *cur = active_list;
+    while (cur != NULL) {
+        /* cur puede volver al pool al cerrarlo: guardamos el siguiente antes */
+        struct socks5 *next = cur->active_next;
+        if (!cur->resolving && now - cur->last_activity >= SOCKS5_IDLE_TIMEOUT) {
+            socks5_kill(s, cur);
+        }
+        cur = next;
+    }
+}
+
 static void
 socks5_read(struct selector_key *key)
 {
+    ATTACHMENT(key)->last_activity = time(NULL);
     struct state_machine *stm = &ATTACHMENT(key)->stm;
     const enum socks_state st = stm_handler_read(stm, key);
     if (st == ERROR || st == DONE) {
@@ -130,6 +201,7 @@ socks5_read(struct selector_key *key)
 static void
 socks5_write(struct selector_key *key)
 {
+    ATTACHMENT(key)->last_activity = time(NULL);
     struct state_machine *stm = &ATTACHMENT(key)->stm;
     const enum socks_state st = stm_handler_write(stm, key);
     if (st == ERROR || st == DONE) {
@@ -140,6 +212,7 @@ socks5_write(struct selector_key *key)
 static void
 socks5_block(struct selector_key *key)
 {
+    ATTACHMENT(key)->last_activity = time(NULL);
     struct state_machine *stm = &ATTACHMENT(key)->stm;
     const enum socks_state st = stm_handler_block(stm, key);
     if (st == ERROR || st == DONE) {

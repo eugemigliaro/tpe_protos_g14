@@ -243,6 +243,7 @@ void
 request_resolv_on_arrival(const unsigned state, struct selector_key *key)
 {
     (void)state;
+    ATTACHMENT(key)->resolving = true; /* el barrido de timeouts no debe tocarla */
     selector_set_interest_key(key, OP_NOOP);
 
     struct selector_key *copy = malloc(sizeof(*copy));
@@ -266,6 +267,7 @@ unsigned
 request_resolv_on_block_ready(struct selector_key *key)
 {
     struct socks5 *s = ATTACHMENT(key);
+    s->resolving = false; /* el thread de resolución ya terminó */
     if (s->origin_resolution == NULL) {
         s->reply = REPLY_HOST_UNREACHABLE;
         return request_reply(key);

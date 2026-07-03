@@ -52,11 +52,31 @@ Elegimos **binario** con handshake de versión + campos `LEN+STRING` + códigos 
 ## Límites — [OK] máximo de usuarios
 - **`MAX_USERS = 10`** (constante documentada). Usuarios gestionados en runtime por el canal de
   monitoreo. Subir la constante si hiciera falta.
-- _(definir además: tamaños de buffer, máximos de campos del protocolo.)_
+- Buffers de I/O: `SOCKS5_BUFFER_SIZE = 4096` por sentido. FQDN hasta 255 bytes (RFC1928).
 
-## Graceful shutdown (RF9)
-- SIGTERM/SIGINT: dejar de aceptar conexiones nuevas y esperar a que terminen las activas; una 2da
-  señal fuerza el apagado. _(detallar al implementar.)_
+## Graceful shutdown (RF9) — [OK]
+- `SIGINT`/`SIGTERM` se manejan con `sigaction` **sin `SA_RESTART`**: la señal interrumpe el
+  `pselect` del selector (`EINTR`, que el selector devuelve como éxito) y el loop principal reacciona.
+- El handler solo incrementa un `volatile sig_atomic_t` (async-signal-safe); toda la lógica corre en
+  el thread principal tras `selector_select`.
+- **1ª señal:** se desregistra y cierra el socket pasivo (no se aceptan más conexiones) y se sigue
+  iterando hasta que `socks5_active_connections() == 0`; ahí se apaga.
+- **2ª señal:** apagado forzado inmediato (descarta las conexiones activas).
+
+## Concurrencia y límite de conexiones (RF1) — [OK con techo conocido]
+- El selector de cátedra usa `pselect(2)` + `fd_set`, acotado por **`FD_SETSIZE` (1024)**. Con 2 fds
+  por conexión (cliente + origin) el techo real es **~505–510 conexiones simultáneas**: cumple el
+  mínimo de 500 exigido, con poco margen.
+- Al arrancar se sube `RLIMIT_NOFILE` (soft→hard) para poder abrir esos descriptores.
+- Superar ese techo requeriría reemplazar `pselect` por `epoll` en el selector (código de cátedra);
+  no se hace. Documentado como limitación.
+
+## Timeouts de inactividad — [OK]
+- Cada conexión guarda `last_activity`; un barrido periódico cierra las que superan
+  **`SOCKS5_IDLE_TIMEOUT` (60 s)** sin actividad. La granularidad del barrido es el `select_timeout`
+  del selector (10 s), así que el cierre real ocurre entre 60 y ~70 s de inactividad.
+- El barrido saltea conexiones en resolución de DNS (thread en vuelo) para no liberar su estado.
+- Pendiente: hacerlo configurable en runtime vía el protocolo de monitoreo (Fase 3).
 
 ## Código de terceros / cátedra
 - Utilidades de cátedra integradas vía parches `git am` (`selector`, `buffer`, `stm`, `parser`,

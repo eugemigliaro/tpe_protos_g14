@@ -4,6 +4,10 @@
  * Levanta un socket pasivo no bloqueante y multiplexa todo (accept, lecturas y
  * escrituras) en un único thread mediante el selector de la cátedra. La lógica
  * por conexión vive en socks5.c / states/.
+ *
+ * Fase 2: apagado controlado ante SIGINT/SIGTERM (deja de aceptar conexiones y
+ * espera a que terminen las activas; una 2da señal fuerza el apagado), cierre
+ * de conexiones inactivas por timeout y elevación del límite de descriptores.
  */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -12,7 +16,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "args.h"
@@ -22,11 +28,33 @@
 
 #define MAX_PENDING_CONN 20
 #define SELECTOR_TIMEOUT 10
+#define SWEEP_INTERVAL   10  /* cada cuántos segundos barrer timeouts */
 
 /* Handler del socket pasivo: solo nos interesa el evento de lectura (accept). */
 static const struct fd_handler passive_handler = {
     .handle_read = socks5_passive_accept,
 };
+
+/* Contador de señales de apagado: 0 normal, 1 apagado controlado, >=2 forzar. */
+static volatile sig_atomic_t shutdown_signals = 0;
+
+static void
+shutdown_handler(const int signal)
+{
+    (void)signal;
+    shutdown_signals++;
+}
+
+/* Sube el límite de descriptores al máximo permitido (ayuda a RF1). */
+static void
+raise_fd_limit(void)
+{
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
+        rl.rlim_cur = rl.rlim_max;
+        setrlimit(RLIMIT_NOFILE, &rl);
+    }
+}
 
 /* Crea un socket pasivo IPv4 no bloqueante en addr:port. -1 ante error. */
 static int
@@ -63,9 +91,18 @@ main(int argc, char *argv[])
     /* respaldo a MSG_NOSIGNAL: nunca morir por escribir a un peer cerrado */
     signal(SIGPIPE, SIG_IGN);
 
+    /* Apagado controlado ante SIGINT/SIGTERM. Sin SA_RESTART a propósito: así
+     * la señal interrumpe el pselect del selector (EINTR) y el loop reacciona. */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = shutdown_handler;
+    sigaction(SIGINT,  &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+
+    raise_fd_limit();
     socks5_init(&args);
 
-    const int socks_fd = create_passive_socket(args.socks_addr, args.socks_port);
+    int socks_fd = create_passive_socket(args.socks_addr, args.socks_port);
     if (socks_fd < 0) {
         fprintf(stderr, "no se pudo abrir el socket SOCKS5 en %s:%u: %s\n",
                 args.socks_addr, args.socks_port, strerror(errno));
@@ -100,10 +137,42 @@ main(int argc, char *argv[])
     fprintf(stderr, "%s escuchando SOCKS5 en %s:%u\n", version_string(),
             args.socks_addr, args.socks_port);
 
+    bool   closing   = false;
+    time_t last_sweep = time(NULL);
+
     for (;;) {
         if (selector_select(selector) != SELECTOR_SUCCESS) {
             fprintf(stderr, "error en el selector: %s\n", strerror(errno));
             ret = 1;
+            break;
+        }
+
+        /* Barrido de timeouts, acotado a una vez cada SWEEP_INTERVAL segundos
+         * para no recorrer la lista de conexiones en cada evento de I/O. */
+        const time_t now = time(NULL);
+        if (now - last_sweep >= SWEEP_INTERVAL) {
+            socks5_sweep_timeouts(selector, now);
+            last_sweep = now;
+        }
+
+        /* Segunda señal: apagado forzado. */
+        if (shutdown_signals >= 2) {
+            fprintf(stderr, "apagado forzado (%u conexiones activas descartadas)\n",
+                    socks5_active_connections());
+            break;
+        }
+        /* Primera señal: dejar de aceptar y esperar a las conexiones activas. */
+        if (shutdown_signals >= 1 && !closing) {
+            closing = true;
+            selector_unregister_fd(selector, socks_fd);
+            close(socks_fd);
+            socks_fd = -1;
+            fprintf(stderr, "apagado controlado: no acepto mas conexiones, "
+                    "esperando %u activas (senal de nuevo para forzar)\n",
+                    socks5_active_connections());
+        }
+        if (closing && socks5_active_connections() == 0) {
+            fprintf(stderr, "todas las conexiones terminaron, apagando\n");
             break;
         }
     }
