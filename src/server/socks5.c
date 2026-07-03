@@ -5,6 +5,7 @@
  * sus buffers. El selector (selector.c) despacha los eventos de I/O hacia la
  * stm; los estados concretos viven en states/.
  */
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -17,6 +18,9 @@
 
 /* Configuración global del servidor (solo lectura). */
 static const struct socks5args *config = NULL;
+
+/* Timeout de inactividad en segundos (modificable por SET_TIMEOUT). */
+static time_t idle_timeout = SOCKS5_IDLE_TIMEOUT;
 
 /* Copia mutable de usuarios: inicializada desde config en socks5_init()
  * y modificable en runtime mediante socks5_add/del_user(). */
@@ -204,7 +208,8 @@ socks5_sweep_timeouts(fd_selector s, time_t now)
     while (cur != NULL) {
         /* cur puede volver al pool al cerrarlo: guardamos el siguiente antes */
         struct socks5 *next = cur->active_next;
-        if (!cur->resolving && now - cur->last_activity >= SOCKS5_IDLE_TIMEOUT) {
+        if (idle_timeout > 0 &&
+            !cur->resolving && now - cur->last_activity >= idle_timeout) {
             socks5_kill(s, cur);
         }
         cur = next;
@@ -380,6 +385,12 @@ socks5_list_users(char names[][256], int max)
         }
     }
     return count;
+}
+
+void
+socks5_set_timeout(uint32_t seconds)
+{
+    idle_timeout = (time_t)seconds;
 }
 
 /* --- tabla de estados de la máquina --- */

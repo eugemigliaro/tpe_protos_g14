@@ -140,6 +140,12 @@ const struct socks5args *socks5_config(void);
 bool socks5_validate_user(const char *name, const char *pass);
 bool socks5_has_users(void);
 
+/**
+ * Cambia el tiempo de inactividad máximo en runtime (SET_TIMEOUT).
+ * Un valor de 0 deshabilita el barrido de timeouts.
+ */
+void socks5_set_timeout(uint32_t seconds);
+
 /** Agrega usuario. Retorna 0=ok, -1=sin espacio, -2=ya existe. */
 int  socks5_add_user(const char *name, const char *pass);
 
