@@ -13,6 +13,8 @@
 #include <errno.h>
 #include <sys/socket.h>
 
+#include "access_log.h"
+#include "metrics.h"
 #include "socks5.h"
 #include "states/states_common.h"
 
@@ -53,6 +55,9 @@ relay_on_arrival(const unsigned state, struct selector_key *key)
 {
     (void)state;
     struct socks5 *s = ATTACHMENT(key);
+    /* RF8: registrar acceso al entrar en COPY (conexión establecida con éxito). */
+    access_log_entry(s->username[0] ? s->username : NULL,
+                     s->origin_str[0] ? s->origin_str : NULL, "OK");
     selector_set_interest(key->s, s->client_fd, OP_READ);
     selector_set_interest(key->s, s->origin_fd, OP_READ);
 }
@@ -70,6 +75,12 @@ relay_on_read_ready(struct selector_key *key)
     const ssize_t n = recv(key->fd, ptr, space, 0);
     if (n > 0) {
         buffer_write_adv(b, n);
+        /* RF6: contabilizar bytes según dirección del flujo. */
+        if (from_client) {
+            metrics_add_bytes_recv((size_t)n);
+        } else {
+            metrics_add_bytes_sent((size_t)n);
+        }
     } else if (n == 0) {
         if (from_client) {
             s->client_closed = true;

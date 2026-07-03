@@ -12,21 +12,6 @@
 #include "socks5.h"
 #include "states/states_common.h"
 
-static bool
-config_has_users(void)
-{
-    const struct socks5args *c = socks5_config();
-    if (c == NULL) {
-        return false;
-    }
-    for (int i = 0; i < MAX_USERS; i++) {
-        if (c->users[i].name != NULL) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static void
 hello_feed(struct hello_parser *p, uint8_t b)
 {
@@ -91,7 +76,7 @@ hello_on_read_ready(struct selector_key *key)
 
     if (p->has_userpass) {
         p->selected = METHOD_USERPASS;
-    } else if (p->has_noauth && !config_has_users()) {
+    } else if (p->has_noauth && !socks5_has_users()) {
         p->selected = METHOD_NO_AUTH;
     } else {
         p->selected = METHOD_NO_ACCEPTABLE;

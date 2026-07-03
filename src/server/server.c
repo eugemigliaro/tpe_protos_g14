@@ -21,7 +21,9 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "access_log.h"
 #include "args.h"
+#include "metrics.h"
 #include "selector.h"
 #include "socks5.h"
 #include "version.h"
@@ -100,6 +102,11 @@ main(int argc, char *argv[])
     sigaction(SIGTERM, &sa, NULL);
 
     raise_fd_limit();
+    metrics_init();
+    if (access_log_open(args.log_path) != 0) {
+        fprintf(stderr, "advertencia: no se pudo abrir el access log '%s'\n",
+                args.log_path);
+    }
     socks5_init(&args);
 
     int socks_fd = create_passive_socket(args.socks_addr, args.socks_port);
@@ -183,6 +190,7 @@ finally:
     }
     selector_close();
     socks5_pool_destroy();
+    access_log_close();
     if (socks_fd >= 0) {
         close(socks_fd);
     }

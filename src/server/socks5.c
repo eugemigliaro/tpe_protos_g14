@@ -10,12 +10,22 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "metrics.h"
 #include "socks5.h"
 
 #define POOL_MAX 64  /* conexiones cacheadas para evitar malloc/free repetidos */
 
 /* Configuración global del servidor (solo lectura). */
 static const struct socks5args *config = NULL;
+
+/* Copia mutable de usuarios: inicializada desde config en socks5_init()
+ * y modificable en runtime mediante socks5_add/del_user(). */
+struct runtime_user {
+    char name[256];
+    char pass[256];
+    bool in_use;
+};
+static struct runtime_user runtime_users[MAX_USERS];
 
 /* Free-list de structs socks5 reutilizables. */
 static struct socks5 *pool      = NULL;
@@ -65,6 +75,16 @@ void
 socks5_init(const struct socks5args *args)
 {
     config = args;
+    memset(runtime_users, 0, sizeof(runtime_users));
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (args->users[i].name != NULL) {
+            strncpy(runtime_users[i].name, args->users[i].name,
+                    sizeof(runtime_users[i].name) - 1);
+            strncpy(runtime_users[i].pass, args->users[i].pass,
+                    sizeof(runtime_users[i].pass) - 1);
+            runtime_users[i].in_use = true;
+        }
+    }
 }
 
 const struct socks5args *
@@ -106,7 +126,10 @@ socks5_new(int client_fd)
 
     s->last_activity = time(NULL);
     s->resolving     = false;
+    s->username[0]   = '\0';
+    s->origin_str[0] = '\0';
     active_add(s);
+    metrics_conn_open();
     return s;
 }
 
@@ -121,6 +144,7 @@ socks5_destroy(struct socks5 *s)
         return;
     }
     /* última referencia: liberar recursos y volver al pool */
+    metrics_conn_close();
     active_remove(s);
     if (s->origin_resolution != NULL) {
         freeaddrinfo(s->origin_resolution);
@@ -281,6 +305,81 @@ fail:
     }
     /* state recién creado, una sola referencia: liberar directamente */
     socks5_destroy(state);
+}
+
+/* --- gestión de usuarios en runtime (RF7) --- */
+
+bool
+socks5_validate_user(const char *name, const char *pass)
+{
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (runtime_users[i].in_use &&
+            strcmp(runtime_users[i].name, name) == 0 &&
+            strcmp(runtime_users[i].pass, pass) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+socks5_has_users(void)
+{
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (runtime_users[i].in_use) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int
+socks5_add_user(const char *name, const char *pass)
+{
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (runtime_users[i].in_use &&
+            strcmp(runtime_users[i].name, name) == 0) {
+            return -2; /* ya existe */
+        }
+    }
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (!runtime_users[i].in_use) {
+            strncpy(runtime_users[i].name, name,
+                    sizeof(runtime_users[i].name) - 1);
+            strncpy(runtime_users[i].pass, pass,
+                    sizeof(runtime_users[i].pass) - 1);
+            runtime_users[i].in_use = true;
+            return 0;
+        }
+    }
+    return -1; /* sin espacio */
+}
+
+int
+socks5_del_user(const char *name)
+{
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (runtime_users[i].in_use &&
+            strcmp(runtime_users[i].name, name) == 0) {
+            memset(&runtime_users[i], 0, sizeof(runtime_users[i]));
+            return 0;
+        }
+    }
+    return -1; /* no encontrado */
+}
+
+int
+socks5_list_users(char names[][256], int max)
+{
+    int count = 0;
+    for (int i = 0; i < MAX_USERS && count < max; i++) {
+        if (runtime_users[i].in_use) {
+            strncpy(names[count], runtime_users[i].name, 255);
+            names[count][255] = '\0';
+            count++;
+        }
+    }
+    return count;
 }
 
 /* --- tabla de estados de la máquina --- */

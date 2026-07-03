@@ -5,27 +5,11 @@
  *   servidor -> VER(0x01) STATUS   (0x00 ok, !=0 fallo)
  */
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "socks5.h"
 #include "states/states_common.h"
-
-static bool
-auth_valid(const char *user, const char *pass)
-{
-    const struct socks5args *c = socks5_config();
-    if (c == NULL) {
-        return false;
-    }
-    for (int i = 0; i < MAX_USERS; i++) {
-        if (c->users[i].name != NULL &&
-            strcmp(c->users[i].name, user) == 0 &&
-            strcmp(c->users[i].pass, pass) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
 
 static void
 auth_feed(struct auth_parser *p, uint8_t b)
@@ -102,7 +86,10 @@ auth_on_read_ready(struct selector_key *key)
         return AUTH_READ;
     }
 
-    p->ok = auth_valid(p->uname, p->passwd);
+    p->ok = socks5_validate_user(p->uname, p->passwd);
+    if (p->ok) {
+        snprintf(s->username, sizeof(s->username), "%s", p->uname);
+    }
     buffer_write(&s->write_buffer, AUTH_VERSION);
     buffer_write(&s->write_buffer, p->ok ? AUTH_STATUS_OK : AUTH_STATUS_FAIL);
     selector_set_interest_key(key, OP_WRITE);

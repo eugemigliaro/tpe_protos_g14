@@ -99,6 +99,10 @@ struct socks5 {
     bool   resolving;             /* true mientras corre el thread de getaddrinfo */
     struct socks5 *active_prev;   /* lista doblemente enlazada de conexiones activas */
     struct socks5 *active_next;
+
+    /* --- Fase 3: datos para métricas y access log --- */
+    char username[256];   /* usuario autenticado (RFC1929); vacío si sin auth */
+    char origin_str[270]; /* "host:puerto" del destino formateado en REQUEST_READ */
 };
 
 /** Acceso al estado adjunto desde los callbacks del selector. */
@@ -128,5 +132,24 @@ void socks5_sweep_timeouts(fd_selector s, time_t now);
 
 /** Configuración global (solo lectura) para validar usuarios. */
 const struct socks5args *socks5_config(void);
+
+/**
+ * Gestión de usuarios en runtime (para el canal de monitoreo — RF7).
+ * Todas operan sobre la copia mutable local de socks5.c, no sobre config.
+ */
+bool socks5_validate_user(const char *name, const char *pass);
+bool socks5_has_users(void);
+
+/** Agrega usuario. Retorna 0=ok, -1=sin espacio, -2=ya existe. */
+int  socks5_add_user(const char *name, const char *pass);
+
+/** Elimina usuario. Retorna 0=ok, -1=no encontrado. */
+int  socks5_del_user(const char *name);
+
+/**
+ * Copia los nombres de usuarios activos en names[][256].
+ * max debe ser >= MAX_USERS. Retorna la cantidad de usuarios.
+ */
+int  socks5_list_users(char names[][256], int max);
 
 #endif

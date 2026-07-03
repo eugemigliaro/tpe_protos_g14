@@ -22,6 +22,8 @@ struct socks5args
     bool disectors_enabled;
 
     struct users users[MAX_USERS];
+    struct users admin;     /* credencial del canal de monitoreo (-A user:pass) */
+    char*        log_path;  /* ruta del archivo de access log */
 };
 
 /**

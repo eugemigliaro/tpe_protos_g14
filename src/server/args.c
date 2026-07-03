@@ -61,6 +61,7 @@ usage(const char* progname)
             "   -p <SOCKS port>  Puerto entrante conexiones SOCKS.\n"
             "   -P <conf port>   Puerto entrante conexiones configuracion\n"
             "   -u <name>:<pass> Usuario y contraseña de usuario que puede usar el proxy. Hasta 10.\n"
+            "   -A <name>:<pass> Credencial de administrador para el canal de monitoreo.\n"
             "   -v               Imprime información sobre la versión versión y termina.\n"
 
             "\n",
@@ -81,6 +82,10 @@ parse_args(const int argc, char** argv, struct socks5args* args)
 
     args->disectors_enabled = true;
 
+    args->admin.name = NULL;
+    args->admin.pass = NULL;
+    args->log_path   = "socks5_access.log";
+
     int c;
     int nusers = 0;
 
@@ -91,7 +96,7 @@ parse_args(const int argc, char** argv, struct socks5args* args)
             {0, 0, 0, 0}
         };
 
-        c = getopt_long(argc, argv, "hl:L:Np:P:u:v", long_options, &option_index);
+        c = getopt_long(argc, argv, "hA:l:L:Np:P:u:v", long_options, &option_index);
         if (c == -1)
             break;
 
@@ -99,6 +104,9 @@ parse_args(const int argc, char** argv, struct socks5args* args)
         {
         case 'h':
             usage(argv[0]);
+            break;
+        case 'A':
+            user(optarg, &args->admin);
             break;
         case 'l':
             args->socks_addr = optarg;

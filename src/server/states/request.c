@@ -25,6 +25,32 @@
 
 /* --- forward declarations --- */
 static unsigned request_connect(struct selector_key *key);
+
+/* Formatea "host:puerto" en s->origin_str para el access log. */
+static void
+format_origin_str(struct socks5 *s)
+{
+    struct request_parser *p = &s->parser.request;
+    const uint16_t port = (uint16_t)((p->port[0] << 8) | p->port[1]);
+    switch (p->atyp) {
+        case SOCKS_ATYP_IPV4: {
+            char ipstr[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, p->addr, ipstr, sizeof(ipstr));
+            snprintf(s->origin_str, sizeof(s->origin_str), "%s:%u", ipstr, port);
+            break;
+        }
+        case SOCKS_ATYP_IPV6: {
+            char ipstr[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, p->addr, ipstr, sizeof(ipstr));
+            snprintf(s->origin_str, sizeof(s->origin_str), "[%s]:%u", ipstr, port);
+            break;
+        }
+        default: /* FQDN */
+            snprintf(s->origin_str, sizeof(s->origin_str), "%s:%u",
+                     (const char *)p->addr, port);
+            break;
+    }
+}
 static unsigned request_connect_fail(struct selector_key *key, int err);
 static unsigned request_reply(struct selector_key *key);
 
@@ -182,6 +208,8 @@ request_on_read_ready(struct selector_key *key)
     if (p->state != REQ_P_DONE) {
         return REQUEST_READ;
     }
+
+    format_origin_str(s);
 
     if (p->cmd != SOCKS_CMD_CONNECT) {
         s->reply = REPLY_COMMAND_NOT_SUPPORTED;
