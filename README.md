@@ -5,72 +5,83 @@ Trabajo Práctico Especial — Protocolos de Comunicación (72.07), ITBA, 2026/1
 Servidor proxy **SOCKS5 (RFC1928)** con autenticación usuario/contraseña (RFC1929), protocolo de
 monitoreo/configuración propio, cliente de monitoreo y métricas.
 
-> Estado: **Fase 1 — SOCKS5 core**. Proxy CONNECT funcional con autenticación user/pass (RFC1929),
-> destinos IPv4/IPv6/FQDN, iteración de IPs (RF4), reply codes completos (RF5) y relay bidireccional
-> no bloqueante. El protocolo de monitoreo y el cliente llegan en fases siguientes (ver
-> `../tpe/plan.md` en el repo de estudio).
+> Estado: **completo** — RF1–RF9, RNF3, RNF5 implementados.
 
 ## Compilación
 
-Requiere un compilador C11 (`cc`/`gcc`) y `make`.
+Requiere un compilador C11 (`cc`/`gcc`), `make` y POSIX threads.
 
 ```sh
 make            # genera bin/server y bin/client
 make clean      # borra bin/ y obj/
 ```
 
-## Ejecución
+## Ejecución rápida
 
 ```sh
-./bin/server -p 1080 -P 8080      # SOCKS5 en 1080, monitoreo en 8080
-./bin/client -L 127.0.0.1 -P 8080 # cliente de monitoreo
+# Servidor con un usuario SOCKS5 y credencial de admin
+./bin/server -p 1080 -P 8080 -u alice:secret -A admin:adminpass
+
+# Tráfico a través del proxy
+curl --proxy socks5://alice:secret@127.0.0.1:1080 http://example.com
+
+# Cliente de monitoreo
+./bin/client -A admin:adminpass stats
+./bin/client -A admin:adminpass log
 ```
 
-| Artefacto | Ubicación | Descripción |
-|-----------|-----------|-------------|
-| `server`  | `bin/server` | Servidor SOCKS5 + monitoreo |
-| `client`  | `bin/client` | Cliente del protocolo de monitoreo |
+## Opciones del servidor
 
-### Opciones del servidor
+| Flag | Descripción | Default |
+|------|-------------|---------|
+| `-p PUERTO` | Puerto SOCKS5 | 1080 |
+| `-P PUERTO` | Puerto de monitoreo | 8080 |
+| `-l ADDR` | Dirección bind SOCKS5 | 0.0.0.0 |
+| `-L ADDR` | Dirección bind monitoreo | 127.0.0.1 |
+| `-u USER:PASS` | Usuario SOCKS5 (repetible, máx. 10) | — |
+| `-A USER:PASS` | Credencial de administrador | — |
+| `-N` | Deshabilita disectores | — |
+| `-v` | Versión | — |
+| `-h` | Ayuda | — |
 
-| Flag | Descripción |
-|------|-------------|
-| `-p PUERTO` | Puerto SOCKS5 (default 1080) |
-| `-P PUERTO` | Puerto del protocolo de monitoreo (default 8080) |
-| `-v` | Versión |
-| `-h` | Ayuda |
+El access log se escribe en `./socks5_access.log` (directorio de trabajo).  
+Sin `-u`: el proxy opera sin autenticación. Sin `-A`: el canal de monitoreo rechaza todo.
 
-### Opciones del cliente
+## Subcomandos del cliente
 
-| Flag | Descripción |
-|------|-------------|
-| `-L ADDR` | Dirección del servicio de monitoreo (default 127.0.0.1) |
-| `-P PUERTO` | Puerto del servicio de monitoreo (default 8080) |
-| `-v` | Versión |
-| `-h` | Ayuda |
+```sh
+./bin/client -A admin:pass stats                  # métricas
+./bin/client -A admin:pass users                  # listar usuarios
+./bin/client -A admin:pass add-user <u> <p>       # agregar usuario
+./bin/client -A admin:pass del-user <u>           # eliminar usuario
+./bin/client -A admin:pass set-timeout <segundos> # timeout de inactividad (0=off)
+./bin/client -A admin:pass log                    # últimas 100 entradas del log
+```
+
+Flags del cliente: `-L ADDR` (default 127.0.0.1), `-P PUERTO` (default 8080), `-A USER:PASS`, `-v`, `-h`.
 
 ## Estructura del proyecto
 
 ```
 .
-├── Makefile, Makefile.inc
-├── README.md
+├── Makefile
 ├── doc/
-│   ├── SPEC.md        # protocolo de monitoreo (estilo RFC)
+│   ├── informe.md     # informe final (11 secciones)
+│   ├── SPEC.md        # especificación del protocolo MNG/1 (estilo RFC)
 │   ├── DECISIONS.md   # decisiones de diseño y justificaciones
-│   └── DESIGN.md      # arquitectura y máquina de estados
+│   └── DESIGN.md      # arquitectura y máquinas de estados
 └── src/
-    ├── server/        # SOCKS5 + monitoreo
-    ├── client/        # cliente de monitoreo
-    └── shared/        # código común
+    ├── server/        # SOCKS5 + canal de monitoreo
+    ├── client/        # cliente del protocolo MNG/1
+    └── shared/        # código común (version, mng_proto.h)
 ```
 
 ## Documentación
 
-- `doc/SPEC.md` — especificación del protocolo de monitoreo.
-- `doc/DECISIONS.md` — decisiones de diseño.
-- `doc/DESIGN.md` — arquitectura y máquina de estados.
-- Informe final: `doc/` (PDF, a entregar).
+- `doc/informe.md` — informe final con las 11 secciones de la cátedra.
+- `doc/SPEC.md` — especificación completa del protocolo de monitoreo MNG/1.
+- `doc/DECISIONS.md` — decisiones de diseño y justificaciones.
+- `doc/DESIGN.md` — arquitectura, máquinas de estados y canal de monitoreo.
 
 ## Integrantes
 
