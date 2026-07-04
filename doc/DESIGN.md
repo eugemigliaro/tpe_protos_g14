@@ -71,3 +71,109 @@ una a una hasta que alguna conecte (RF4). Cada causa de fallo se mapea a su repl
 Todo el I/O usa el `buffer` de la cátedra: se lee/escribe lo que el kernel permita y lo pendiente
 queda para el próximo evento. En `COPY` los intereses de cada fd se recalculan según haya datos por
 leer/escribir y se hace `SHUT_WR` del par cuando un lado manda EOF y se vacía su buffer en tránsito.
+
+---
+
+## Canal de monitoreo (MNG/1)
+
+### Propósito y transporte
+
+El servidor escucha en un segundo puerto TCP (por defecto `127.0.0.1:8080`, flag `-P`) para
+conexiones de administración. El protocolo binario **MNG/1** (especificado en `doc/SPEC.md`) opera
+sobre este canal con I/O **no bloqueante** multiplexada en el mismo event loop que SOCKS5: no hay
+thread ni socket bloqueante adicional. El socket pasivo de monitoreo se registra en el selector
+exactamente igual que el SOCKS5.
+
+### Pool de conexiones (`struct mng_conn`)
+
+`monitor.c` gestiona un pool de hasta `MNG_POOL_MAX = 16` structs `mng_conn` reutilizables,
+con la misma estrategia free-list que `struct socks5`. Campos principales:
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `fd` | `int` | Descriptor de la conexión de administración |
+| `stm` | `struct state_machine` | Máquina de estados MNG (6 estados) |
+| `authenticated` | `bool` | `true` tras handshake exitoso |
+| `close_after_write` | `bool` | Si `true`, cierra la conexión al vaciar el write buffer |
+| `read_buffer` | `buffer` | Entrada; tamaño `MNG_READ_SIZE = 2048` bytes |
+| `write_buffer` | `buffer` | Salida; tamaño `MNG_WRITE_SIZE = 65536` bytes (64 KB) |
+| `parsers` | `union` | `mng_auth_parser` o `mng_cmd_parser`, excluyentes en el tiempo |
+| `next` | `struct mng_conn *` | Free-list del pool |
+
+El write buffer es 64 KB para acomodar el peor caso de `GET_LOG`:
+1 + 2 + 100 × (2 + 511) = 51.301 bytes.
+
+`close_after_write` se activa en `CMD_CLOSE` y en respuestas de error de autenticación para cerrar
+limpiamente después de enviar el último byte, sin dejar fds colgados.
+
+### Máquina de estados del canal de monitoreo
+
+```
+MNG_AUTH_READ ──► MNG_AUTH_WRITE ──► MNG_CMD_READ ──► MNG_RESP_WRITE ──┐
+                                           ▲                            │ (!close_after_write)
+                                           └────────────────────────────┘
+                                           │ (close_after_write o CMD_CLOSE)
+                                           ▼
+                                      MNG_DONE / MNG_ERROR
+```
+
+| Estado | Evento | Acción |
+|--------|--------|--------|
+| `MNG_AUTH_READ` | read | Parsea VER+ULEN+UNAME+PLEN+PASSWD; valida contra credencial admin |
+| `MNG_AUTH_WRITE` | write | Envía VER(1)+STATUS(1); ok → `MNG_CMD_READ`, falla → `MNG_DONE` |
+| `MNG_CMD_READ` | read | Parsea comando y parámetros con `cmd_feed()`; ejecuta con `exec_command()` |
+| `MNG_RESP_WRITE` | write | Escribe respuesta; si `!close_after_write` vuelve a `MNG_CMD_READ` |
+| `MNG_DONE` | — | Conexión terminada normalmente |
+| `MNG_ERROR` | — | Terminación por error de I/O o protocolo |
+
+La vuelta `MNG_RESP_WRITE → MNG_CMD_READ` permite **múltiples comandos por sesión** sin
+desconectarse. Los buffers se resetean con `buffer_reset()` de forma segura porque en
+`MNG_RESP_WRITE` el write buffer está completamente vaciado y en `MNG_CMD_READ` el read buffer
+está completamente consumido.
+
+### Parsers (byte a byte)
+
+Ambos parsers son STM hand-rolled sin allocaciones; avanzan byte a byte sobre el `buffer` de entrada:
+
+**`auth_feed()`** — STM interno:
+```
+VER → ULEN → UNAME[0..ulen-1] → PLEN → PASSWD[0..plen-1] → DONE / ERROR
+```
+
+**`cmd_feed()`** — STM interno, ramificado según el tipo de comando:
+```
+CMD ──(ADD_USER / DEL_USER)──► ULEN → UNAME → PLEN → PASSWD → DONE
+    ──(SET_TIMEOUT)───────────► TIMEOUT[4 bytes big-endian] → DONE
+    ──(GET_STATS / LIST_USERS / GET_LOG / CLOSE)──────────► DONE  (sin parámetros)
+```
+
+### Ejecución de comandos (`exec_command`)
+
+| Comando | Byte | API del servidor | Respuesta wire |
+|---------|------|-----------------|----------------|
+| `ADD_USER` | 0x01 | `socks5_add_user()` | STATUS(1) |
+| `DEL_USER` | 0x02 | `socks5_del_user()` | STATUS(1) |
+| `LIST_USERS` | 0x03 | `socks5_list_users()` | STATUS(1)+COUNT(1)+[ULEN(1)+UNAME]* |
+| `GET_STATS` | 0x04 | `metrics_get()` | STATUS(1)+HIST(8)+CURR(4)+SENT(8)+RECV(8) |
+| `GET_LOG` | 0x05 | `access_log_get_recent()` | STATUS(1)+COUNT(2)+[ELEN(2)+ENTRY]* |
+| `SET_TIMEOUT` | 0x06 | `socks5_set_timeout()` | STATUS(1) |
+| `CLOSE` | 0x07 | — | STATUS(1); activa `close_after_write` |
+
+Todos los campos de más de un byte se codifican en **big-endian** (network byte order).
+
+### Métricas y access log
+
+Las métricas se guardan en variables globales en `metrics.c`:
+- `hist_connections` (`uint64_t`): conexiones totales históricas.
+- `curr_connections` (`uint32_t`): conexiones activas en este momento.
+- `bytes_sent` / `bytes_recv` (`uint64_t`): bytes transferidos en el relay.
+
+El access log (`access_log.c`) escribe una línea por conexión exitosa al archivo `socks5_access.log`
+(en el directorio de trabajo). Un búfer circular en RAM retiene las últimas 100 entradas para `GET_LOG`.
+
+### Cliente de monitoreo (`src/client/client.c`)
+
+Usa **I/O bloqueante** (permitido por RNF5). Sus primitivas `read_all()` / `write_all()` garantizan
+lectura/escritura exacta de N bytes. Subcomandos: `stats`, `users`, `add-user`, `del-user`,
+`set-timeout`, `log`. Flags: `-L <ip>` (default 127.0.0.1), `-P <puerto>` (default 8080),
+`-A <user:pass>`, `-v`, `-h`.
