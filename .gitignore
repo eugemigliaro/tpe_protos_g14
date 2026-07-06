@@ -3,6 +3,9 @@ bin/
 obj/
 *.o
 
+# Logs de runtime (el access log se genera al ejecutar; no se versiona)
+*.log
+
 # OS / editor
 .DS_Store
 Thumbs.db
