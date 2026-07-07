@@ -89,12 +89,12 @@ Todos los campos multi-byte se codifican en big-endian. Los 7 comandos definidos
 | 0x02 | DEL_USER    | ULEN(1)+UNAME                     | STATUS(1)                              |
 | 0x03 | LIST_USERS  | —                                 | STATUS(1)+COUNT(1)+[ULEN(1)+UNAME]*   |
 | 0x04 | GET_STATS   | —                                 | STATUS(1)+HIST(8)+CURR(4)+SENT(8)+RECV(8) |
-| 0x05 | GET_LOG     | —                                 | STATUS(1)+COUNT(2)+[ELEN(2)+ENTRY]*   |
-| 0x06 | SET_TIMEOUT | TIMEOUT(4)                        | STATUS(1)                              |
+| 0x05 | SET_TIMEOUT | TIMEOUT(4)                        | STATUS(1)                              |
+| 0x06 | GET_LOG     | —                                 | STATUS(1)+COUNT(2)+[ELEN(2)+ENTRY]*   |
 | 0x07 | CLOSE       | —                                 | STATUS(1); cierra sesión               |
 
 Códigos de STATUS: `0x00` = ok, `0x01` = no encontrado, `0x02` = tabla llena,
-`0x03` = argumentos inválidos, `0x04` = error interno.
+`0x03` = argumentos inválidos, `0xFF` = error interno.
 
 La sesión es stateful: un cliente puede enviar múltiples comandos sin reconectar (el servidor
 vuelve a esperar el siguiente comando tras cada respuesta), hasta recibir `CLOSE` o EOF.
@@ -214,7 +214,7 @@ Entorno: macOS (Darwin 25.5.0), loopback, compilado con `cc -std=c11 -Wall -Wext
 
 ```
 $ ./bin/server -p 1080 -P 8080 -u alice:secret -A admin:adminpass
-0.1.0-scaffold escuchando SOCKS5 en 0.0.0.0:1080
+1.0.0 escuchando SOCKS5 en 0.0.0.0:1080
 monitoreo en 127.0.0.1:8080
 ```
 

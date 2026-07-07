@@ -85,4 +85,6 @@ Flags del cliente: `-L ADDR` (default 127.0.0.1), `-P PUERTO` (default 8080), `-
 
 ## Integrantes
 
-- _(completar: nombre, legajo, email)_
+- Eugenio Migliaro, 65508, emigliaro@itba.edu.ar
+- Jonás Glaubart, 65790, jglaubart@itba.edu.ar
+- Franco Manuel Pampuri, 65552, fpampuri@itba.edu.ar

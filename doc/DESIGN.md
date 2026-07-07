@@ -155,8 +155,8 @@ CMD ──(ADD_USER / DEL_USER)──► ULEN → UNAME → PLEN → PASSWD → 
 | `DEL_USER` | 0x02 | `socks5_del_user()` | STATUS(1) |
 | `LIST_USERS` | 0x03 | `socks5_list_users()` | STATUS(1)+COUNT(1)+[ULEN(1)+UNAME]* |
 | `GET_STATS` | 0x04 | `metrics_get()` | STATUS(1)+HIST(8)+CURR(4)+SENT(8)+RECV(8) |
-| `GET_LOG` | 0x05 | `access_log_get_recent()` | STATUS(1)+COUNT(2)+[ELEN(2)+ENTRY]* |
-| `SET_TIMEOUT` | 0x06 | `socks5_set_timeout()` | STATUS(1) |
+| `SET_TIMEOUT` | 0x05 | `socks5_set_timeout()` | STATUS(1) |
+| `GET_LOG` | 0x06 | `access_log_get_recent()` | STATUS(1)+COUNT(2)+[ELEN(2)+ENTRY]* |
 | `CLOSE` | 0x07 | — | STATUS(1); activa `close_after_write` |
 
 Todos los campos de más de un byte se codifican en **big-endian** (network byte order).
