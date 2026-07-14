@@ -13,6 +13,7 @@ Requiere un compilador C11 (`cc`/`gcc`), `make` y POSIX threads.
 
 ```sh
 make            # genera bin/server y bin/client
+make test-stress # integración: límite, timeout, shutdown y 500 SOCKS + 16 MNG
 make clean      # borra bin/ y obj/
 ```
 
@@ -54,7 +55,7 @@ Sin `-u`: el proxy opera sin autenticación. Sin `-A`: el canal de monitoreo rec
 ./bin/client -A admin:pass users                  # listar usuarios
 ./bin/client -A admin:pass add-user alice secret  # agregar usuario
 ./bin/client -A admin:pass del-user alice         # eliminar usuario
-./bin/client -A admin:pass set-timeout 120        # timeout de inactividad (0=off)
+./bin/client -A admin:pass set-timeout 120        # timeout SOCKS/MNG (0=off)
 ./bin/client -A admin:pass log                    # últimas 100 entradas del log
 ```
 

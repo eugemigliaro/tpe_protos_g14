@@ -47,7 +47,8 @@ Cliente → [TCP connect a 1080]
 Tipos de dirección soportados:
 - `ATYP=0x01` (IPv4): connect directo.
 - `ATYP=0x04` (IPv6): connect directo.
-- `ATYP=0x03` (FQDN): resolución en thread aparte (`getaddrinfo`), iteración de IPs (RF4).
+- `ATYP=0x03` (FQDN): resolución mediante un worker joinable que conserva una referencia propia,
+  publica el resultado de forma sincronizada y permite iterar las IPs obtenidas (RF4).
 
 Solo se soporta el comando `CONNECT` (0x01). `BIND` y `UDP ASSOCIATE` retornan reply `0x07`
 (command not supported).
@@ -97,7 +98,8 @@ Códigos de STATUS: `0x00` = ok, `0x01` = no encontrado, `0x02` = tabla llena,
 `0x03` = argumentos inválidos, `0xFF` = error interno.
 
 La sesión es stateful: un cliente puede enviar múltiples comandos sin reconectar (el servidor
-vuelve a esperar el siguiente comando tras cada respuesta), hasta recibir `CLOSE` o EOF.
+vuelve a esperar el siguiente comando tras cada respuesta), hasta recibir `CLOSE` o EOF. Se admiten
+como máximo 16 sesiones MNG simultáneas y `SET_TIMEOUT` se aplica tanto a SOCKS5 como a MNG.
 
 La especificación completa con ejemplos en hexdump está en `doc/SPEC.md`.
 
@@ -121,9 +123,10 @@ al loop. La solución fue no setear ese flag: la señal causa `EINTR`, que el se
 ### 2.2. Cierre de conexiones tras escribir la respuesta de error
 
 Al rechazar una autenticación MNG/1, el servidor necesita enviar la respuesta de fallo *y luego*
-cerrar. Si se cierra el fd inmediatamente, el write buffer pendiente puede perderse. La solución
-fue el flag `close_after_write` en `struct mng_conn`: el estado `MNG_AUTH_WRITE` lo activa en caso
-de fallo, y el handler de `MNG_RESP_WRITE` cierra la conexión recién cuando el buffer queda vacío.
+cerrar. Si se cierra el fd inmediatamente, el write buffer pendiente puede perderse. El estado
+`MNG_AUTH_WRITE` vacía primero la respuesta y cierra cuando `authenticated == false`.
+`close_after_write` cumple la misma función para `CMD_CLOSE`, y `shutting_down` para una respuesta
+que ya estaba preparada al comenzar el apagado controlado.
 
 ### 2.3. Reuso de buffers entre comandos MNG
 
@@ -152,6 +155,14 @@ los fds en variables locales antes de llamar a `unregister`.
 El protocolo MNG/1 no soporta pipelining (enviar un comando antes de recibir la respuesta del
 anterior). Esto simplifica el parser del servidor pero limita la latencia en clientes que necesiten
 ejecutar muchos comandos seguidos. Se documentó como limitación en la SPEC.
+
+### 2.7. Ciclo de vida de las resoluciones DNS
+
+`getaddrinfo()` se ejecuta fuera del event loop para no bloquear el resto del servidor. El worker
+DNS conserva una referencia sobre la conexión y publica únicamente resultado y status bajo mutex;
+el thread principal consume esa publicación y continúa con `CONNECT`. Los workers son joinables y
+el apagado espera los que sigan en vuelo antes de destruir el selector o los pools. Si falla la
+notificación al selector, el loop principal detecta y reintenta el resultado pendiente.
 
 ---
 
@@ -191,10 +202,10 @@ ejecutar muchos comandos seguidos. Se documentó como limitación en la SPEC.
 ## 5. Conclusiones
 
 El trabajo implementa un proxy SOCKS5 funcional que cumple todos los requisitos funcionales (RF1–RF9)
-y no funcionales (RNF3, RNF5) establecidos en la consigna. El diseño de un único thread con I/O no
-bloqueante multiplexada demostró ser adecuado para el rango de concurrencia exigido (≥ 500
-conexiones) y simplifica el razonamiento sobre sincronización: al no haber threads concurrentes para
-el estado de las conexiones, no hay condiciones de carrera en los datos compartidos.
+y no funcionales (RNF3, RNF5) establecidos en la consigna. El I/O no bloqueante se concentra en el
+thread del event loop; la única excepción son los workers de resolución DNS. Estos no modifican la
+máquina de estados directamente: publican su resultado de forma sincronizada para que lo consuma el
+thread principal y mantienen viva la conexión mientras trabajan.
 
 El protocolo de monitoreo MNG/1 es un protocolo binario completo con handshake de versión,
 autenticación propia, sesión multi-comando y 7 operaciones de administración. Su integración en el
@@ -322,6 +333,19 @@ Bytes recibidos:       264
 El proxy no introduce overhead apreciable en loopback. En un escenario real, el cuello de botella
 sería la red o el origin server, no el proxy.
 
+### 6.4. Pruebas del ciclo de vida DNS
+
+Se verificaron resolución FQDN exitosa y negativa, fallo de creación del worker y fallo inyectado de
+la notificación al selector. También se probó el apagado con resoluciones demoradas y 40 consultas
+concurrentes. ASan+UBSan y TSan finalizaron sin diagnósticos después de sincronizar la publicación y
+el acceso al thread del selector.
+
+### 6.5. Prueba de lifecycle y capacidad MNG
+
+El target `make test-stress` verifica por sockets reales el rechazo de la sesión MNG número 17, el
+cierre por timeout, el apagado controlado y una carga mixta de 16 sesiones MNG autenticadas junto
+con 500 conexiones SOCKS5 con `CONNECT` completo. Los cuatro casos finalizaron correctamente.
+
 ---
 
 ## 7. Guía de instalación
@@ -330,6 +354,7 @@ sería la red o el origin server, no el proxy.
 
 - Compilador C11: GCC ≥ 9 o Clang ≥ 11
 - POSIX threads (`-pthread`)
+- Python 3 para ejecutar `make test-stress` (opcional)
 - Sistema operativo: Linux o macOS
 
 ### Compilación
@@ -338,6 +363,7 @@ sería la red o el origin server, no el proxy.
 git clone https://github.com/eugemigliaro/tpe_protos_g14.git
 cd tpe_protos_g14
 make
+make test-stress # prueba integrada de carga y lifecycle MNG
 ```
 
 Los binarios se generan en `bin/`:
@@ -452,10 +478,10 @@ Entradas del log (2):
 
 ```bash
 kill -SIGINT <pid>
-# → apagado controlado: no acepto mas conexiones, esperando N activas (senal de nuevo para forzar)
+# → no acepta nuevas conexiones; drena SOCKS y respuestas MNG pendientes
 
 kill -SIGINT <pid>   # segunda señal
-# → apagado forzado (N conexiones activas descartadas)
+# → apagado forzado (N SOCKS y M monitoreo activas descartadas)
 ```
 
 ---
@@ -468,9 +494,9 @@ Ver [`doc/DESIGN.md`](DESIGN.md) para la descripción completa de la arquitectur
 - **Máquina de estados SOCKS5** (11 estados: `HELLO_READ` → … → `COPY` → `DONE`).
 - **Estado por conexión** (`struct socks5`): fds, parsers en union, buffers, pool con free-list,
   contador de referencias.
-- **Resolución de nombres (RF3/RF4):** thread dedicado a `getaddrinfo` + iteración de IPs en
-  `REQUEST_CONNECTING`.
+- **Resolución de nombres (RF3/RF4):** worker joinable con referencia propia, publicación
+  sincronizada e iteración de IPs en `REQUEST_CONNECTING`.
 - **Lecturas/escrituras parciales:** I/O con el buffer de cátedra; intereses del selector
   recalculados en cada evento.
-- **Canal de monitoreo MNG/1:** pool `mng_conn` (16 slots), STM de 6 estados, parsers byte a byte
-  (`auth_feed` / `cmd_feed`), ejecución de 7 comandos, cliente de monitoreo con I/O bloqueante.
+- **Canal de monitoreo MNG/1:** máximo de 16 sesiones activas, pool `mng_conn` (16 slots), timeout,
+  STM de 6 estados, ejecución de 7 comandos y cliente de monitoreo con I/O bloqueante.

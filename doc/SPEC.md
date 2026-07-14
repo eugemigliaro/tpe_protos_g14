@@ -13,7 +13,7 @@ de un canal TCP dedicado para:
 
 - Consultar métricas de operación (conexiones históricas, concurrentes, bytes transferidos).
 - Listar, agregar y eliminar usuarios SOCKS5 en tiempo de ejecución sin reiniciar el servidor.
-- Ajustar el tiempo de inactividad máximo de conexiones SOCKS5 en tiempo de ejecución.
+- Ajustar el tiempo de inactividad máximo de conexiones SOCKS5 y MNG en tiempo de ejecución.
 - Consultar las últimas entradas del access log.
 - Cerrar ordenadamente la sesión de monitoreo.
 
@@ -247,7 +247,8 @@ Todos los campos en big-endian.
 
 ### 6.5. SET_TIMEOUT — `0x05`
 
-Cambia el tiempo de inactividad máximo de conexiones SOCKS5. El valor `0` deshabilita el timeout.
+Cambia el tiempo de inactividad máximo de conexiones SOCKS5 y MNG. El valor `0` deshabilita el
+timeout para ambas.
 
 **Request:**
 ```
@@ -398,9 +399,11 @@ El cierre puede ocurrir por:
    enviar respuesta.
 3. **Error de autenticación**: el servidor envía STATUS ≠ `0x00` y cierra inmediatamente.
 4. **Error interno**: el servidor cierra la conexión sin garantizar una respuesta previa.
+5. **Timeout de inactividad**: el servidor cierra la sesión cuando supera el valor configurado
+   mediante `SET_TIMEOUT`.
 
 El servidor NO cierra la conexión de forma unilateral durante una sesión autenticada, salvo error
-irrecuperable o apagado del proceso.
+irrecuperable, timeout de inactividad o apagado del proceso.
 
 ---
 
@@ -411,11 +414,11 @@ irrecuperable o apagado del proceso.
 | ULEN=0 o PLEN=0 en handshake          | Se acepta (nombre o contraseña vacíos). El servidor valida contra su credencial de admin. |
 | CMD desconocido                        | STATUS `0x03` (bad args); la sesión continúa.            |
 | ULEN > 255                            | Imposible en el protocolo (ULEN es uint8).               |
-| TIMEOUT=0 en SET_TIMEOUT              | Deshabilita el barrido de inactividad.                    |
+| TIMEOUT=0 en SET_TIMEOUT              | Deshabilita el barrido de inactividad SOCKS5 y MNG.       |
 | GET_LOG sin entradas                  | STATUS `0x00`, COUNT=0x0000.                             |
 | Más de 100 entradas en el log         | Se retornan las 100 más recientes.                        |
 | ADD_USER con usuario ya existente     | STATUS `0x01`.                                           |
 | Tabla de usuarios llena               | STATUS `0x02`.                                           |
 | DEL_USER de usuario inexistente       | STATUS `0x01`.                                           |
 | Pipelining                            | Comportamiento indefinido. No hacer.                     |
-| Conexiones simultáneas de monitoreo   | Permitidas hasta `MNG_POOL_MAX` (16). Cada una requiere autenticación propia. |
+| Conexiones simultáneas de monitoreo   | Permitidas hasta `MNG_MAX_CONNECTIONS` (16). La siguiente conexión se acepta y cierra sin handshake. |

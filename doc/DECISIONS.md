@@ -54,6 +54,8 @@ Elegimos **binario** con handshake de versión + campos `LEN+STRING` + códigos 
 ## Límites — [OK] máximo de usuarios
 - **`MAX_USERS = 10`** (constante documentada). Usuarios gestionados en runtime por el canal de
   monitoreo. Subir la constante si hiciera falta.
+- **`MNG_MAX_CONNECTIONS = 16`** sesiones de monitoreo simultáneas. El límite reserva los
+  descriptores necesarios para sostener 500 conexiones SOCKS5 completas bajo `FD_SETSIZE=1024`.
 - Buffers de I/O: `SOCKS5_BUFFER_SIZE = 4096` por sentido. FQDN hasta 255 bytes (RFC1928).
 
 ## Graceful shutdown (RF9) — [OK]
@@ -61,8 +63,9 @@ Elegimos **binario** con handshake de versión + campos `LEN+STRING` + códigos 
   `pselect` del selector (`EINTR`, que el selector devuelve como éxito) y el loop principal reacciona.
 - El handler solo incrementa un `volatile sig_atomic_t` (async-signal-safe); toda la lógica corre en
   el thread principal tras `selector_select`.
-- **1ª señal:** se desregistra y cierra el socket pasivo (no se aceptan más conexiones) y se sigue
-  iterando hasta que `socks5_active_connections() == 0`; ahí se apaga.
+- **1ª señal:** se desregistran ambos sockets pasivos. Las sesiones MNG que esperan entrada se
+  cierran; las que tienen una respuesta preparada terminan de escribirla. El loop continúa hasta
+  que no quedan conexiones SOCKS5 ni MNG activas.
 - **2ª señal:** deja de procesar conexiones activas; antes de liberar recursos espera los workers
   DNS en vuelo, ya que `getaddrinfo()` no es cancelable de forma portable.
 
@@ -75,11 +78,12 @@ Elegimos **binario** con handshake de versión + campos `LEN+STRING` + códigos 
   no se hace. Documentado como limitación.
 
 ## Timeouts de inactividad — [OK]
-- Cada conexión guarda `last_activity`; un barrido periódico cierra las que superan
+- Cada conexión SOCKS5 o MNG guarda `last_activity`; un barrido periódico cierra las que superan
   **`SOCKS5_IDLE_TIMEOUT` (60 s)** sin actividad. La granularidad del barrido es el `select_timeout`
   del selector (10 s), así que el cierre real ocurre entre 60 y ~70 s de inactividad.
 - El barrido saltea conexiones en resolución de DNS (thread en vuelo) para no liberar su estado.
-- El valor puede modificarse en runtime mediante `SET_TIMEOUT` del protocolo de monitoreo.
+- El valor se comparte entre ambos servicios y puede modificarse en runtime mediante
+  `SET_TIMEOUT` del protocolo de monitoreo. El valor cero deshabilita ambos barridos.
 
 ## Código de terceros / cátedra
 - Utilidades de cátedra integradas vía parches `git am` (`selector`, `buffer`, `stm`, `parser`,

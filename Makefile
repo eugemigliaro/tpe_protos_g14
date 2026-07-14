@@ -17,6 +17,9 @@ CLIENT_BIN=$(OUTPUT_FOLDER)/client
 
 all: server client
 
+test-stress: all
+	python3 test/mng_lifecycle_test.py
+
 server: $(SERVER_BIN)
 client: $(CLIENT_BIN)
 
@@ -36,4 +39,4 @@ obj/%.o: src/%.c
 clean:
 	rm -rf $(OUTPUT_FOLDER) $(OBJECTS_FOLDER)
 
-.PHONY: all server client clean
+.PHONY: all server client test-stress clean

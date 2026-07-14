@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "access_log.h"
@@ -32,11 +33,49 @@
 static struct mng_conn     *pool      = NULL;
 static unsigned             pool_size = 0;
 static const struct socks5args *mng_cfg = NULL;
+static struct mng_conn     *active_list  = NULL;
+static unsigned             active_count = 0;
+static time_t               idle_timeout = SOCKS5_IDLE_TIMEOUT;
 
 void
 mng_init(const struct socks5args *args)
 {
     mng_cfg = args;
+}
+
+static void
+active_add(struct mng_conn *c)
+{
+    c->active_prev = NULL;
+    c->active_next = active_list;
+    if (active_list != NULL) {
+        active_list->active_prev = c;
+    }
+    active_list = c;
+    c->active = true;
+    active_count++;
+}
+
+static void
+active_remove(struct mng_conn *c)
+{
+    if (c->active_prev != NULL) {
+        c->active_prev->active_next = c->active_next;
+    } else {
+        active_list = c->active_next;
+    }
+    if (c->active_next != NULL) {
+        c->active_next->active_prev = c->active_prev;
+    }
+    c->active_prev = c->active_next = NULL;
+    c->active = false;
+    active_count--;
+}
+
+unsigned
+mng_active_connections(void)
+{
+    return active_count;
 }
 
 static struct mng_conn *
@@ -45,7 +84,7 @@ mng_new(int fd)
     struct mng_conn *c;
     if (pool != NULL) {
         c = pool;
-        pool = pool->next;
+        pool = pool->pool_next;
         pool_size--;
     } else {
         c = malloc(sizeof(*c));
@@ -55,6 +94,7 @@ mng_new(int fd)
     }
     memset(c, 0, sizeof(*c));
     c->fd = fd;
+    c->last_activity = time(NULL);
     buffer_init(&c->read_buffer,  MNG_READ_SIZE,  c->raw_read);
     buffer_init(&c->write_buffer, MNG_WRITE_SIZE, c->raw_write);
     return c;
@@ -66,9 +106,12 @@ mng_destroy(struct mng_conn *c)
     if (c == NULL) {
         return;
     }
+    if (c->active) {
+        active_remove(c);
+    }
     if (pool_size < MNG_POOL_MAX) {
-        c->next = pool;
-        pool    = c;
+        c->pool_next = pool;
+        pool         = c;
         pool_size++;
     } else {
         free(c);
@@ -79,7 +122,7 @@ void
 mng_pool_destroy(void)
 {
     while (pool != NULL) {
-        struct mng_conn *next = pool->next;
+        struct mng_conn *next = pool->pool_next;
         free(pool);
         pool = next;
     }
@@ -283,6 +326,7 @@ exec_command(struct mng_conn *c)
 
         case MNG_CMD_SET_TIMEOUT: {
             socks5_set_timeout(p->timeout);
+            idle_timeout = (time_t)p->timeout;
             buffer_write(b, MNG_STATUS_OK);
             break;
         }
@@ -432,6 +476,9 @@ mng_auth_write_on_write_ready(struct selector_key *key)
     if (buffer_can_read(&c->write_buffer)) {
         return MNG_AUTH_WRITE;
     }
+    if (c->shutting_down) {
+        return MNG_DONE;
+    }
     if (!c->authenticated) {
         return MNG_DONE;
     }
@@ -514,7 +561,7 @@ mng_resp_write_on_write_ready(struct selector_key *key)
     if (buffer_can_read(&c->write_buffer)) {
         return MNG_RESP_WRITE;
     }
-    if (c->close_after_write) {
+    if (c->close_after_write || c->shutting_down) {
         return MNG_DONE;
     }
     selector_set_interest_key(key, OP_READ);
@@ -538,6 +585,7 @@ static void
 mng_read(struct selector_key *key)
 {
     struct mng_conn *c = MNG_ATTACHMENT(key);
+    c->last_activity = time(NULL);
     const enum mng_state st =
         (enum mng_state)stm_handler_read(&c->stm, key);
     if (st == MNG_DONE || st == MNG_ERROR) {
@@ -549,6 +597,7 @@ static void
 mng_write(struct selector_key *key)
 {
     struct mng_conn *c = MNG_ATTACHMENT(key);
+    c->last_activity = time(NULL);
     const enum mng_state st =
         (enum mng_state)stm_handler_write(&c->stm, key);
     if (st == MNG_DONE || st == MNG_ERROR) {
@@ -568,6 +617,57 @@ static const struct fd_handler mng_handler = {
     .handle_close = mng_close,
 };
 
+static void
+mng_kill(fd_selector s, struct mng_conn *c)
+{
+    const int fd = c->fd;
+    selector_unregister_fd(s, fd);
+    close(fd);
+}
+
+void
+mng_sweep_timeouts(fd_selector s, time_t now)
+{
+    struct mng_conn *cur = active_list;
+    while (cur != NULL) {
+        struct mng_conn *next = cur->active_next;
+        if (idle_timeout > 0 && now >= cur->last_activity &&
+            now - cur->last_activity >= idle_timeout) {
+            mng_kill(s, cur);
+        }
+        cur = next;
+    }
+}
+
+void
+mng_begin_shutdown(fd_selector s)
+{
+    struct mng_conn *cur = active_list;
+    while (cur != NULL) {
+        struct mng_conn *next = cur->active_next;
+        const unsigned state = stm_state(&cur->stm);
+        if ((state == MNG_AUTH_WRITE || state == MNG_RESP_WRITE) &&
+            buffer_can_read(&cur->write_buffer)) {
+            cur->shutting_down = true;
+            if (selector_set_interest(s, cur->fd, OP_WRITE) !=
+                SELECTOR_SUCCESS) {
+                mng_kill(s, cur);
+            }
+        } else {
+            mng_kill(s, cur);
+        }
+        cur = next;
+    }
+}
+
+void
+mng_force_close_all(fd_selector s)
+{
+    while (active_list != NULL) {
+        mng_kill(s, active_list);
+    }
+}
+
 void
 mng_passive_accept(struct selector_key *key)
 {
@@ -577,6 +677,10 @@ mng_passive_accept(struct selector_key *key)
 
     const int fd = accept(key->fd, (struct sockaddr *)&addr, &addr_len);
     if (fd < 0) {
+        return;
+    }
+    if (active_count >= MNG_MAX_CONNECTIONS) {
+        close(fd);
         return;
     }
     if (selector_fd_set_nio(fd) < 0) {
@@ -596,6 +700,7 @@ mng_passive_accept(struct selector_key *key)
         SELECTOR_SUCCESS) {
         goto fail;
     }
+    active_add(c);
     return;
 
 fail:

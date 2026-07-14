@@ -79,5 +79,6 @@ Todos los campos multi-byte en **big-endian**.
 | Entradas de log en RAM (LOG_RECENT_MAX) | 100 |
 | Buffer lectura MNG | 2 KB |
 | Buffer escritura MNG | 64 KB |
-| Pool de conexiones MNG (MNG_POOL_MAX) | 16 |
-| TIMEOUT = 0 | Deshabilita barrido de inactividad |
+| Sesiones MNG simultáneas (MNG_MAX_CONNECTIONS) | 16 |
+| Structs MNG retenidos en el pool (MNG_POOL_MAX) | 16 |
+| TIMEOUT = 0 | Deshabilita barrido de inactividad SOCKS5 y MNG |

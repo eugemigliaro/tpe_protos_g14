@@ -84,10 +84,11 @@ sobre este canal con I/O **no bloqueante** multiplexada en el mismo event loop q
 thread ni socket bloqueante adicional. El socket pasivo de monitoreo se registra en el selector
 exactamente igual que el SOCKS5.
 
-### Pool de conexiones (`struct mng_conn`)
+### Límite, tracking y pool de conexiones (`struct mng_conn`)
 
-`monitor.c` gestiona un pool de hasta `MNG_POOL_MAX = 16` structs `mng_conn` reutilizables,
-con la misma estrategia free-list que `struct socks5`. Campos principales:
+`monitor.c` admite hasta `MNG_MAX_CONNECTIONS = 16` sesiones simultáneas y mantiene una lista
+doblemente enlazada para contarlas, aplicar timeouts y apagarlas ordenadamente. Al cerrar una
+sesión, conserva hasta `MNG_POOL_MAX = 16` structs reutilizables en un free-list. Campos principales:
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
@@ -95,16 +96,20 @@ con la misma estrategia free-list que `struct socks5`. Campos principales:
 | `stm` | `struct state_machine` | Máquina de estados MNG (6 estados) |
 | `authenticated` | `bool` | `true` tras handshake exitoso |
 | `close_after_write` | `bool` | Si `true`, cierra la conexión al vaciar el write buffer |
+| `shutting_down` | `bool` | Cierra al terminar una respuesta pendiente durante shutdown |
+| `last_activity` | `time_t` | Última actividad para el timeout configurable |
 | `read_buffer` | `buffer` | Entrada; tamaño `MNG_READ_SIZE = 2048` bytes |
 | `write_buffer` | `buffer` | Salida; tamaño `MNG_WRITE_SIZE = 65536` bytes (64 KB) |
-| `parsers` | `union` | `mng_auth_parser` o `mng_cmd_parser`, excluyentes en el tiempo |
-| `next` | `struct mng_conn *` | Free-list del pool |
+| `auth_parser`, `cmd_parser` | structs | Parsers del handshake y de comandos |
+| `pool_next` | `struct mng_conn *` | Free-list del pool |
+| `active_prev`, `active_next` | `struct mng_conn *` | Lista de sesiones activas |
 
 El write buffer es 64 KB para acomodar el peor caso de `GET_LOG`:
 1 + 2 + 100 × (2 + 511) = 51.301 bytes.
 
-`close_after_write` se activa en `CMD_CLOSE` y en respuestas de error de autenticación para cerrar
-limpiamente después de enviar el último byte, sin dejar fds colgados.
+`close_after_write` se activa en `CMD_CLOSE`. Una autenticación fallida cierra al terminar su
+respuesta mediante `authenticated == false`; durante el apagado, `shutting_down` permite vaciar una
+respuesta ya preparada antes de cerrar.
 
 ### Máquina de estados del canal de monitoreo
 
@@ -156,7 +161,7 @@ CMD ──(ADD_USER)──────────────► ULEN → UNAME
 | `DEL_USER` | 0x02 | `socks5_del_user()` | STATUS(1) |
 | `LIST_USERS` | 0x03 | `socks5_list_users()` | STATUS(1)+COUNT(1)+[ULEN(1)+UNAME]* |
 | `GET_STATS` | 0x04 | `metrics_get()` | STATUS(1)+HIST(8)+CURR(4)+SENT(8)+RECV(8) |
-| `SET_TIMEOUT` | 0x05 | `socks5_set_timeout()` | STATUS(1) |
+| `SET_TIMEOUT` | 0x05 | timeout compartido SOCKS5/MNG | STATUS(1) |
 | `GET_LOG` | 0x06 | `access_log_get_recent()` | STATUS(1)+COUNT(2)+[ELEN(2)+ENTRY]* |
 | `CLOSE` | 0x07 | — | STATUS(1); activa `close_after_write` |
 

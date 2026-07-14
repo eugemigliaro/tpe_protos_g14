@@ -11,14 +11,16 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 
 #include "args.h"
 #include "buffer.h"
 #include "selector.h"
 #include "stm.h"
 
-/* Tamaño del pool de conexiones de monitoreo. */
-#define MNG_POOL_MAX   16
+/* Máximo de sesiones simultáneas y structs retenidos en el free-list. */
+#define MNG_MAX_CONNECTIONS 16
+#define MNG_POOL_MAX        16
 /* Buffer de lectura: suficiente para cualquier comando + args (max ~514 B). */
 #define MNG_READ_SIZE  2048
 /* Buffer de escritura: suficiente para GET_LOG peor caso (~51 KB). */
@@ -85,6 +87,8 @@ struct mng_conn {
 
     bool authenticated;      /* true tras handshake exitoso */
     bool close_after_write;  /* true si CLOSE fue el último comando procesado */
+    bool shutting_down;      /* cerrar al terminar una respuesta ya preparada */
+    bool active;             /* pertenece a la lista de sesiones registradas */
 
     struct mng_auth_parser auth_parser;
     struct mng_cmd_parser  cmd_parser;
@@ -94,7 +98,11 @@ struct mng_conn {
     uint8_t raw_read [MNG_READ_SIZE];
     uint8_t raw_write[MNG_WRITE_SIZE];
 
-    struct mng_conn *next;  /* free-list del pool */
+    time_t last_activity;
+
+    struct mng_conn *pool_next;
+    struct mng_conn *active_prev;
+    struct mng_conn *active_next;
 };
 
 /** Acceso al estado adjunto desde callbacks del selector. */
@@ -108,6 +116,21 @@ void mng_init(const struct socks5args *args);
 
 /** Libera el pool de conexiones de monitoreo. */
 void mng_pool_destroy(void);
+
+/** Cantidad de sesiones de monitoreo actualmente registradas. */
+unsigned mng_active_connections(void);
+
+/** Cierra sesiones que superaron el timeout de inactividad configurado. */
+void mng_sweep_timeouts(fd_selector s, time_t now);
+
+/**
+ * Inicia el apagado controlado: deja terminar respuestas pendientes y cierra
+ * de inmediato las sesiones que estaban esperando entrada.
+ */
+void mng_begin_shutdown(fd_selector s);
+
+/** Cierra inmediatamente todas las sesiones registradas. */
+void mng_force_close_all(fd_selector s);
 
 /**
  * Handler del socket pasivo de monitoreo: acepta una conexión entrante y la

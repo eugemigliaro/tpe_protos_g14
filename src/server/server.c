@@ -185,13 +185,15 @@ main(int argc, char *argv[])
         const time_t now = time(NULL);
         if (now - last_sweep >= SWEEP_INTERVAL) {
             socks5_sweep_timeouts(selector, now);
+            mng_sweep_timeouts(selector, now);
             last_sweep = now;
         }
 
         /* Segunda señal: apagado forzado. */
         if (shutdown_signals >= 2) {
-            fprintf(stderr, "apagado forzado (%u conexiones activas descartadas)\n",
-                    socks5_active_connections());
+            fprintf(stderr, "apagado forzado (%u SOCKS y %u monitoreo "
+                    "activas descartadas)\n", socks5_active_connections(),
+                    mng_active_connections());
             break;
         }
         /* Primera señal: dejar de aceptar y esperar a las conexiones activas. */
@@ -203,11 +205,14 @@ main(int argc, char *argv[])
             selector_unregister_fd(selector, mng_fd);
             close(mng_fd);
             mng_fd = -1;
+            mng_begin_shutdown(selector);
             fprintf(stderr, "apagado controlado: no acepto mas conexiones, "
-                    "esperando %u activas (senal de nuevo para forzar)\n",
-                    socks5_active_connections());
+                    "esperando %u SOCKS y %u monitoreo "
+                    "(senal de nuevo para forzar)\n",
+                    socks5_active_connections(), mng_active_connections());
         }
-        if (closing && socks5_active_connections() == 0) {
+        if (closing && socks5_active_connections() == 0 &&
+            mng_active_connections() == 0) {
             fprintf(stderr, "todas las conexiones terminaron, apagando\n");
             break;
         }
@@ -223,6 +228,7 @@ finally: {
      * conexiones deben seguir vivos hasta que todos los workers terminen. */
     request_resolv_wait_all();
     if (selector != NULL) {
+        mng_force_close_all(selector);
         selector_destroy(selector);
     }
     selector_close();
