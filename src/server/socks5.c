@@ -344,7 +344,7 @@ socks5_add_user(const char *name, const char *pass)
     for (int i = 0; i < MAX_USERS; i++) {
         if (runtime_users[i].in_use &&
             strcmp(runtime_users[i].name, name) == 0) {
-            return -2; /* ya existe */
+            return -2; // ya existe
         }
     }
     for (int i = 0; i < MAX_USERS; i++) {
@@ -357,7 +357,7 @@ socks5_add_user(const char *name, const char *pass)
             return 0;
         }
     }
-    return -1; /* sin espacio */
+    return -1; // sin espacio
 }
 
 int

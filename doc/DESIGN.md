@@ -142,7 +142,8 @@ VER → ULEN → UNAME[0..ulen-1] → PLEN → PASSWD[0..plen-1] → DONE / ERRO
 
 **`cmd_feed()`** — STM interno, ramificado según el tipo de comando:
 ```
-CMD ──(ADD_USER / DEL_USER)──► ULEN → UNAME → PLEN → PASSWD → DONE
+CMD ──(ADD_USER)──────────────► ULEN → UNAME → PLEN → PASSWD → DONE
+    ──(DEL_USER)──────────────► ULEN → UNAME → DONE
     ──(SET_TIMEOUT)───────────► TIMEOUT[4 bytes big-endian] → DONE
     ──(GET_STATS / LIST_USERS / GET_LOG / CLOSE)──────────► DONE  (sin parámetros)
 ```
