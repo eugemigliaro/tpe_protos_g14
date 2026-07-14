@@ -335,7 +335,7 @@ sería la red o el origin server, no el proxy.
 ### Compilación
 
 ```bash
-git clone <url-del-repo>
+git clone https://github.com/eugemigliaro/tpe_protos_g14.git
 cd tpe_protos_g14
 make
 ```

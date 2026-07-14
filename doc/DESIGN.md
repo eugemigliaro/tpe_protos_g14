@@ -1,6 +1,6 @@
 # Documento de diseño
 
-Arquitectura de la aplicación y máquina de estados. Ver `../tpe/apuntes-clases-tp.md` §9–§12.
+Arquitectura de la aplicación y de sus máquinas de estados.
 
 ## Arquitectura general
 

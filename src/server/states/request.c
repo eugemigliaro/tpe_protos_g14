@@ -10,6 +10,7 @@
  * reportan todos los reply codes según la causa de fallo (RF5).
  */
 #include <arpa/inet.h>
+#include <assert.h>
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -25,6 +26,40 @@
 
 /* --- forward declarations --- */
 static unsigned request_connect(struct selector_key *key);
+
+/* Jobs DNS en vuelo. Solo el event loop modifica la lista; los workers
+ * publican resultado/completion bajo este mutex. */
+static pthread_mutex_t dns_jobs_mutex = PTHREAD_MUTEX_INITIALIZER;
+static struct socks5  *dns_jobs       = NULL;
+static unsigned        dns_jobs_count = 0;
+
+static void
+dns_job_remove_locked(struct socks5 *s)
+{
+    struct socks5 **cur = &dns_jobs;
+    while (*cur != NULL && *cur != s) {
+        cur = &(*cur)->dns_next;
+    }
+    assert(*cur == s);
+    assert(dns_jobs_count > 0);
+    *cur = s->dns_next;
+    s->dns_next = NULL;
+    dns_jobs_count--;
+}
+
+/* Intenta encolar la completion. Si selector_notify_block() no puede reservar
+ * su nodo, el flag queda levantado para que el event loop reintente. */
+static void
+dns_job_notify(struct socks5 *s)
+{
+    const selector_status st = selector_notify_block(s->dns_selector,
+                                                       s->dns_client_fd);
+    pthread_mutex_lock(&dns_jobs_mutex);
+    if (s->dns_active) {
+        s->dns_notification_failed = st != SELECTOR_SUCCESS;
+    }
+    pthread_mutex_unlock(&dns_jobs_mutex);
+}
 
 /* Formatea "host:puerto" en s->origin_str para el access log. */
 static void
@@ -245,9 +280,7 @@ request_on_read_ready(struct selector_key *key)
 static void *
 request_resolv_thread(void *arg)
 {
-    struct selector_key *key = arg;
-    struct socks5 *s = ATTACHMENT(key);
-    struct request_parser *p = &s->parser.request;
+    struct socks5 *s = arg;
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
@@ -255,15 +288,17 @@ request_resolv_thread(void *arg)
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
-    char service[6];
-    const uint16_t port = (uint16_t)((p->port[0] << 8) | p->port[1]);
-    snprintf(service, sizeof(service), "%u", port);
+    struct addrinfo *result = NULL;
+    const int gai_status = getaddrinfo(s->dns_host, s->dns_service,
+                                       &hints, &result);
 
-    s->origin_resolution = NULL;
-    getaddrinfo((const char *)p->addr, service, &hints, &s->origin_resolution);
+    pthread_mutex_lock(&dns_jobs_mutex);
+    s->dns_result     = result;
+    s->dns_gai_status = gai_status;
+    s->dns_completed  = true;
+    pthread_mutex_unlock(&dns_jobs_mutex);
 
-    selector_notify_block(key->s, key->fd);
-    free(key);
+    dns_job_notify(s);
     return NULL;
 }
 
@@ -271,38 +306,148 @@ void
 request_resolv_on_arrival(const unsigned state, struct selector_key *key)
 {
     (void)state;
-    ATTACHMENT(key)->resolving = true; /* el barrido de timeouts no debe tocarla */
+    struct socks5 *s = ATTACHMENT(key);
+    struct request_parser *p = &s->parser.request;
+
+    s->resolving = true; /* el barrido de timeouts no debe tocarla */
     selector_set_interest_key(key, OP_NOOP);
+    assert(!s->dns_active);
 
-    struct selector_key *copy = malloc(sizeof(*copy));
-    if (copy == NULL) {
-        /* sin memoria para el thread: despertamos igual y on_block reporta fallo */
-        selector_notify_block(key->s, key->fd);
-        return;
-    }
-    *copy = *key;
+    memcpy(s->dns_host, p->addr, p->addr_len);
+    s->dns_host[p->addr_len] = '\0';
+    const uint16_t port = (uint16_t)((p->port[0] << 8) | p->port[1]);
+    snprintf(s->dns_service, sizeof(s->dns_service), "%u", port);
+    s->dns_selector            = key->s;
+    s->dns_client_fd           = key->fd;
+    s->dns_result              = NULL;
+    s->dns_gai_status          = EAI_SYSTEM;
+    s->dns_completed           = false;
+    s->dns_notification_failed = false;
+    s->dns_thread_started      = false;
+    s->dns_active              = true;
 
-    pthread_t tid;
-    if (pthread_create(&tid, NULL, request_resolv_thread, copy) != 0) {
-        free(copy);
-        selector_notify_block(key->s, key->fd);
-        return;
+    /* El job mantiene viva la conexión aunque se desregistren sus fds. */
+    socks5_retain(s);
+
+    pthread_mutex_lock(&dns_jobs_mutex);
+    s->dns_next = dns_jobs;
+    dns_jobs = s;
+    dns_jobs_count++;
+
+    const int create_status = pthread_create(&s->dns_thread, NULL,
+                                              request_resolv_thread, s);
+    if (create_status == 0) {
+        s->dns_thread_started = true;
+    } else {
+        /* Se procesa como una resolución fallida mediante el mismo camino. */
+        s->dns_completed = true;
     }
-    pthread_detach(tid);
+    pthread_mutex_unlock(&dns_jobs_mutex);
+
+    if (create_status != 0) {
+        dns_job_notify(s);
+    }
 }
 
 unsigned
 request_resolv_on_block_ready(struct selector_key *key)
 {
     struct socks5 *s = ATTACHMENT(key);
+
+    pthread_mutex_lock(&dns_jobs_mutex);
+    if (!s->dns_active || !s->dns_completed) {
+        pthread_mutex_unlock(&dns_jobs_mutex);
+        return REQUEST_RESOLV;
+    }
+    const bool thread_started = s->dns_thread_started;
+    pthread_mutex_unlock(&dns_jobs_mutex);
+
+    /* La notificación se envía al final del worker: este join no espera al
+     * getaddrinfo(), solo termina de sincronizar y recupera sus recursos. */
+    if (thread_started) {
+        pthread_join(s->dns_thread, NULL);
+    }
+
+    pthread_mutex_lock(&dns_jobs_mutex);
+    struct addrinfo *result = s->dns_result;
+    const int gai_status = s->dns_gai_status;
+    dns_job_remove_locked(s);
+    s->dns_result              = NULL;
+    s->dns_active              = false;
+    s->dns_thread_started      = false;
+    s->dns_completed           = false;
+    s->dns_notification_failed = false;
+    pthread_mutex_unlock(&dns_jobs_mutex);
+
     s->resolving = false; /* el thread de resolución ya terminó */
-    if (s->origin_resolution == NULL) {
+    s->origin_resolution = result;
+    socks5_release(s); /* referencia propia del job DNS */
+
+    if (gai_status != 0 || s->origin_resolution == NULL) {
         s->reply = REPLY_HOST_UNREACHABLE;
         return request_reply(key);
     }
     s->origin_resolution_cur = s->origin_resolution;
     request_pick_next(s);
     return request_connect(key);
+}
+
+void
+request_resolv_retry_notifications(void)
+{
+    pthread_mutex_lock(&dns_jobs_mutex);
+    for (struct socks5 *s = dns_jobs; s != NULL; s = s->dns_next) {
+        if (s->dns_completed && s->dns_notification_failed) {
+            const selector_status st = selector_notify_block(s->dns_selector,
+                                                               s->dns_client_fd);
+            s->dns_notification_failed = st != SELECTOR_SUCCESS;
+        }
+    }
+    pthread_mutex_unlock(&dns_jobs_mutex);
+}
+
+unsigned
+request_resolv_pending_jobs(void)
+{
+    pthread_mutex_lock(&dns_jobs_mutex);
+    const unsigned count = dns_jobs_count;
+    pthread_mutex_unlock(&dns_jobs_mutex);
+    return count;
+}
+
+void
+request_resolv_wait_all(void)
+{
+    for (;;) {
+        pthread_mutex_lock(&dns_jobs_mutex);
+        struct socks5 *s = dns_jobs;
+        if (s == NULL) {
+            pthread_mutex_unlock(&dns_jobs_mutex);
+            break;
+        }
+        const bool thread_started = s->dns_thread_started;
+        pthread_mutex_unlock(&dns_jobs_mutex);
+
+        if (thread_started) {
+            pthread_join(s->dns_thread, NULL);
+        }
+
+        pthread_mutex_lock(&dns_jobs_mutex);
+        struct addrinfo *result = s->dns_result;
+        dns_job_remove_locked(s);
+        s->dns_result              = NULL;
+        s->dns_active              = false;
+        s->dns_thread_started      = false;
+        s->dns_completed           = false;
+        s->dns_notification_failed = false;
+        pthread_mutex_unlock(&dns_jobs_mutex);
+
+        if (result != NULL) {
+            freeaddrinfo(result);
+        }
+        s->resolving = false;
+        socks5_release(s); /* referencia propia del job DNS */
+    }
 }
 
 /* --- CONNECT --- */

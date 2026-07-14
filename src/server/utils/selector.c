@@ -149,7 +149,8 @@ struct fdselector {
     struct timespec slave_t;
 
     // notificaciónes entre blocking jobs y el selector
-    volatile pthread_t      selector_thread;
+    pthread_t               selector_thread;
+    bool                    selector_thread_set;
     /** protege el acceso a resolutions jobs */
     pthread_mutex_t         resolution_mutex;
     /**
@@ -509,6 +510,7 @@ selector_status
 selector_notify_block(fd_selector  s,
                  const int    fd) {
     selector_status ret = SELECTOR_SUCCESS;
+    pthread_t selector_thread;
 
     // TODO(juan): usar un pool
     struct blocking_job *job = malloc(sizeof(*job));
@@ -521,12 +523,19 @@ selector_notify_block(fd_selector  s,
 
     // encolamos en el selector los resultados
     pthread_mutex_lock(&s->resolution_mutex);
+    if(!s->selector_thread_set) {
+        pthread_mutex_unlock(&s->resolution_mutex);
+        free(job);
+        ret = SELECTOR_IARGS;
+        goto finally;
+    }
     job->next = s->resolution_jobs;
     s->resolution_jobs = job;
+    selector_thread = s->selector_thread;
     pthread_mutex_unlock(&s->resolution_mutex);
 
     // notificamos al hilo principal
-    pthread_kill(s->selector_thread, conf.signal);
+    pthread_kill(selector_thread, conf.signal);
 
 finally:
     return ret;
@@ -540,7 +549,10 @@ selector_select(fd_selector s) {
     memcpy(&s->slave_w, &s->master_w, sizeof(s->slave_w));
     memcpy(&s->slave_t, &s->master_t, sizeof(s->slave_t));
 
+    pthread_mutex_lock(&s->resolution_mutex);
     s->selector_thread = pthread_self();
+    s->selector_thread_set = true;
+    pthread_mutex_unlock(&s->resolution_mutex);
 
     int fds = pselect(s->max_fd + 1, &s->slave_r, &s->slave_w, 0, &s->slave_t,
                       &emptyset);

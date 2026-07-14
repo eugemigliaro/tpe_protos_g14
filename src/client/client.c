@@ -1,7 +1,8 @@
 /**
  * client.c - cliente de monitoreo MNG/1 (RNF5).
  *
- * I/O bloqueante. Flujo: connect → handshake de auth → enviar CMD → leer STATUS+data → imprimir → CLOSE → salir.
+ * I/O bloqueante. Flujo: connect → handshake de auth → enviar CMD →
+ * leer STATUS+data → imprimir → CLOSE → salir.
  *
  * Uso:
  *   ./bin/client [-L addr] [-P puerto] -A admin:pass COMANDO [args]

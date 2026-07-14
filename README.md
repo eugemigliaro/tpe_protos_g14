@@ -52,9 +52,9 @@ Sin `-u`: el proxy opera sin autenticación. Sin `-A`: el canal de monitoreo rec
 ```sh
 ./bin/client -A admin:pass stats                  # métricas
 ./bin/client -A admin:pass users                  # listar usuarios
-./bin/client -A admin:pass add-user <u> <p>       # agregar usuario
-./bin/client -A admin:pass del-user <u>           # eliminar usuario
-./bin/client -A admin:pass set-timeout <segundos> # timeout de inactividad (0=off)
+./bin/client -A admin:pass add-user alice secret  # agregar usuario
+./bin/client -A admin:pass del-user alice         # eliminar usuario
+./bin/client -A admin:pass set-timeout 120        # timeout de inactividad (0=off)
 ./bin/client -A admin:pass log                    # últimas 100 entradas del log
 ```
 

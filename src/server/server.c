@@ -5,9 +5,8 @@
  * escrituras) en un único thread mediante el selector de la cátedra. La lógica
  * por conexión vive en socks5.c / states/.
  *
- * Fase 2: apagado controlado ante SIGINT/SIGTERM (deja de aceptar conexiones y
- * espera a que terminen las activas; una 2da señal fuerza el apagado), cierre
- * de conexiones inactivas por timeout y elevación del límite de descriptores.
+ * También implementa el apagado controlado, el timeout de inactividad y la
+ * elevación del límite de descriptores.
  */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -176,6 +175,11 @@ main(int argc, char *argv[])
             break;
         }
 
+        /* Fallback ante SELECTOR_ENOMEM en selector_notify_block(): los jobs
+         * completados conservan su resultado y se reintentan desde el thread
+         * seguro del event loop. */
+        request_resolv_retry_notifications();
+
         /* Barrido de timeouts, acotado a una vez cada SWEEP_INTERVAL segundos
          * para no recorrer la lista de conexiones en cada evento de I/O. */
         const time_t now = time(NULL);
@@ -209,7 +213,15 @@ main(int argc, char *argv[])
         }
     }
 
-finally:
+finally: {
+    const unsigned pending_dns = request_resolv_pending_jobs();
+    if (pending_dns > 0) {
+        fprintf(stderr, "esperando %u resoluciones DNS antes de liberar recursos\n",
+                pending_dns);
+    }
+    /* getaddrinfo() no es cancelable de forma portable. El selector y las
+     * conexiones deben seguir vivos hasta que todos los workers terminen. */
+    request_resolv_wait_all();
     if (selector != NULL) {
         selector_destroy(selector);
     }
@@ -223,5 +235,6 @@ finally:
     if (mng_fd >= 0) {
         close(mng_fd);
     }
+}
     return ret;
 }

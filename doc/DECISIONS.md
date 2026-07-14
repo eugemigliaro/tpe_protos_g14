@@ -1,7 +1,6 @@
 # Decisiones de diseño
 
-Decisiones técnicas con su justificación. Sirve para el informe y la defensa.
-Estado: decisiones marcadas **[OK]** ya están acordadas; las demás se completan al implementar.
+Decisiones técnicas de la implementación y su justificación.
 
 ## Transporte
 - SOCKS5: **TCP** (lo fija RFC1928).
@@ -20,7 +19,8 @@ Elegimos **binario** con handshake de versión + campos `LEN+STRING` + códigos 
 - Handshake de versión al inicio (permite evolucionar sin romper compatibilidad).
 
 ## Pipelining
-- _(a definir al implementar el protocolo de monitoreo; si no se soporta, aclararlo en SPEC.)_
+- El protocolo de monitoreo no admite pipelining: el cliente espera la respuesta de cada comando
+  antes de enviar el siguiente. La restricción está definida en `SPEC.md`.
 
 ## Concurrencia e I/O — [OK] selector de cátedra
 - Un único thread, I/O no bloqueante multiplexada con el **`selector` de la cátedra** (integrado vía
@@ -30,7 +30,9 @@ Elegimos **binario** con handshake de versión + campos `LEN+STRING` + códigos 
 ## Resolución de nombres y robustez (RF4)
 - `getaddrinfo` **fuera del thread principal** (thread dedicado que solo resuelve y despierta al main,
   o `getaddrinfo_a`) para no bloquear el event loop.
-- Robustez: ante un FQDN con múltiples IPs, **iterar toda la lista** y probar la siguiente si una falla.
+- Robustez: ante un FQDN con múltiples IPs, **iterar toda la lista** y probar la siguiente si una
+  falla. Cada resolución mantiene una referencia propia sobre la conexión; el shutdown espera los
+  workers DNS antes de liberar el selector y los pools.
 
 ## Manejo de errores y reply codes (RF5)
 - Usar **todos los reply codes** de SOCKS5 (no solo success / general failure), mapeando cada causa
@@ -45,7 +47,7 @@ Elegimos **binario** con handshake de versión + campos `LEN+STRING` + códigos 
 
 ## Métricas y registro de accesos — [OK]
 - **Métricas** (conexiones históricas/concurrentes, bytes): en memoria, **volátiles** (lo permite RF6).
-- **Registro de accesos** (RF8): **persistido a archivo** (append `usuario fecha destino:puerto
+- **Registro de accesos** (RF8): **persistido a archivo** (append `fecha usuario destino:puerto
   resultado`), porque el caso de uso (queja externa posterior) exige que sobreviva reinicios. El
   comando del protocolo de monitoreo lo expone.
 
@@ -61,7 +63,8 @@ Elegimos **binario** con handshake de versión + campos `LEN+STRING` + códigos 
   el thread principal tras `selector_select`.
 - **1ª señal:** se desregistra y cierra el socket pasivo (no se aceptan más conexiones) y se sigue
   iterando hasta que `socks5_active_connections() == 0`; ahí se apaga.
-- **2ª señal:** apagado forzado inmediato (descarta las conexiones activas).
+- **2ª señal:** deja de procesar conexiones activas; antes de liberar recursos espera los workers
+  DNS en vuelo, ya que `getaddrinfo()` no es cancelable de forma portable.
 
 ## Concurrencia y límite de conexiones (RF1) — [OK con techo conocido]
 - El selector de cátedra usa `pselect(2)` + `fd_set`, acotado por **`FD_SETSIZE` (1024)**. Con 2 fds
@@ -76,7 +79,7 @@ Elegimos **binario** con handshake de versión + campos `LEN+STRING` + códigos 
   **`SOCKS5_IDLE_TIMEOUT` (60 s)** sin actividad. La granularidad del barrido es el `select_timeout`
   del selector (10 s), así que el cierre real ocurre entre 60 y ~70 s de inactividad.
 - El barrido saltea conexiones en resolución de DNS (thread en vuelo) para no liberar su estado.
-- Pendiente: hacerlo configurable en runtime vía el protocolo de monitoreo (Fase 3).
+- El valor puede modificarse en runtime mediante `SET_TIMEOUT` del protocolo de monitoreo.
 
 ## Código de terceros / cátedra
 - Utilidades de cátedra integradas vía parches `git am` (`selector`, `buffer`, `stm`, `parser`,

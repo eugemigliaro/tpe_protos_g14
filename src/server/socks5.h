@@ -2,6 +2,7 @@
 #define SOCKS5_H_g14
 
 #include <netdb.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <time.h>
 
@@ -89,18 +90,35 @@ struct socks5 {
     uint8_t raw_read[SOCKS5_BUFFER_SIZE];
     uint8_t raw_write[SOCKS5_BUFFER_SIZE];
 
-    /* Conteo de referencias (un fd cliente + un fd origin comparten esta data). */
+    /* Conteo de referencias: fd cliente, fd origin y job DNS comparten data. */
     unsigned references;
     /* Free-list del pool de conexiones. */
     struct socks5 *next;
 
-    /* --- Fase 2: timeout de inactividad y listado de conexiones activas --- */
+    /* Timeout de inactividad y listado de conexiones activas. */
     time_t last_activity;         /* último evento de I/O; base del timeout */
     bool   resolving;             /* true mientras corre el thread de getaddrinfo */
     struct socks5 *active_prev;   /* lista doblemente enlazada de conexiones activas */
     struct socks5 *active_next;
 
-    /* --- Fase 3: datos para métricas y access log --- */
+    /* Trabajo DNS. El thread solo accede a estos campos; la referencia tomada
+     * al iniciarlo mantiene viva la estructura hasta que el event loop lo
+     * consume o el shutdown hace join. Los flags se protegen con el mutex de
+     * jobs definido en request.c. */
+    pthread_t       dns_thread;
+    fd_selector     dns_selector;
+    int             dns_client_fd;
+    char            dns_host[SOCKS_FQDN_MAX + 1];
+    char            dns_service[6];
+    struct addrinfo *dns_result;
+    int             dns_gai_status;
+    bool            dns_active;
+    bool            dns_thread_started;
+    bool            dns_completed;
+    bool            dns_notification_failed;
+    struct socks5  *dns_next;
+
+    /* Datos para métricas y access log. */
     char username[256];   /* usuario autenticado (RFC1929); vacío si sin auth */
     char origin_str[270]; /* "host:puerto" del destino formateado en REQUEST_READ */
 };
@@ -120,6 +138,10 @@ void socks5_passive_accept(struct selector_key *key);
  */
 selector_status socks5_register_origin(struct selector_key *key,
                                        struct socks5 *s);
+
+/** Adquiere/libera una referencia explícita al estado de conexión. */
+void socks5_retain(struct socks5 *s);
+void socks5_release(struct socks5 *s);
 
 /** Libera el pool de conexiones reutilizables. */
 void socks5_pool_destroy(void);

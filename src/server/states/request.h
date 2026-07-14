@@ -43,6 +43,15 @@ unsigned request_on_read_ready(struct selector_key *key);
 void     request_resolv_on_arrival(const unsigned state, struct selector_key *key);
 unsigned request_resolv_on_block_ready(struct selector_key *key);
 
+/** Reintenta notificaciones DNS que no pudieron encolarse en el selector. */
+void request_resolv_retry_notifications(void);
+
+/** Cantidad de workers DNS todavía pendientes de consumo/join. */
+unsigned request_resolv_pending_jobs(void);
+
+/** Espera y descarta todos los workers DNS pendientes antes del shutdown. */
+void request_resolv_wait_all(void);
+
 /* CONNECTING: confirmación del connect no bloqueante al origin. */
 unsigned request_connecting_on_write_ready(struct selector_key *key);
 

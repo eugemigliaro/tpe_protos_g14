@@ -6,6 +6,7 @@
  * stm; los estados concretos viven en states/.
  */
 #include <stdint.h>
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -137,14 +138,23 @@ socks5_new(int client_fd)
     return s;
 }
 
-static void
-socks5_destroy(struct socks5 *s)
+void
+socks5_retain(struct socks5 *s)
+{
+    assert(s != NULL);
+    assert(s->references > 0);
+    s->references++;
+}
+
+void
+socks5_release(struct socks5 *s)
 {
     if (s == NULL) {
         return;
     }
-    if (s->references > 1) {
-        s->references--;
+    assert(s->references > 0);
+    s->references--;
+    if (s->references != 0) {
         return;
     }
     /* última referencia: liberar recursos y volver al pool */
@@ -252,7 +262,7 @@ socks5_block(struct selector_key *key)
 static void
 socks5_close(struct selector_key *key)
 {
-    socks5_destroy(ATTACHMENT(key));
+    socks5_release(ATTACHMENT(key));
 }
 
 /* Handler compartido por el fd del cliente y el del origin. */
@@ -269,7 +279,7 @@ socks5_register_origin(struct selector_key *key, struct socks5 *s)
     const selector_status st = selector_register(key->s, s->origin_fd,
                                                  &socks5_handler, OP_WRITE, s);
     if (st == SELECTOR_SUCCESS) {
-        s->references++;
+        socks5_retain(s);
     }
     return st;
 }
@@ -309,7 +319,7 @@ fail:
         close(client);
     }
     /* state recién creado, una sola referencia: liberar directamente */
-    socks5_destroy(state);
+    socks5_release(state);
 }
 
 /* --- gestión de usuarios en runtime (RF7) --- */
@@ -344,7 +354,7 @@ socks5_add_user(const char *name, const char *pass)
     for (int i = 0; i < MAX_USERS; i++) {
         if (runtime_users[i].in_use &&
             strcmp(runtime_users[i].name, name) == 0) {
-            return -2; // ya existe
+            return -2; /* ya existe */
         }
     }
     for (int i = 0; i < MAX_USERS; i++) {
@@ -357,7 +367,7 @@ socks5_add_user(const char *name, const char *pass)
             return 0;
         }
     }
-    return -1; // sin espacio
+    return -1; /* sin espacio */
 }
 
 int
