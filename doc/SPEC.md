@@ -26,11 +26,11 @@ El protocolo es **independiente del protocolo SOCKS5** y opera en un puerto TCP 
 | Propiedad   | Valor                                             |
 |-------------|---------------------------------------------------|
 | Transporte  | TCP                                               |
-| Formato     | Binario (campos de longitud fija o length-prefix) |
+| Formato     | Binario (campos de longitud fija) |
 | Byte order  | Big-endian (network byte order) para todos los campos de más de 1 byte |
 | Framing     | Longitud implícita en los campos de cada mensaje (no hay delimitador externo) |
 | Pipelining  | No soportado. El cliente DEBE esperar la respuesta antes de enviar el siguiente comando. |
-| Cifrado     | No (fuera de alcance). Desplegar en red de confianza o túnel SSH. |
+| Cifrado     | No (fuera de alcance). Usar en red de confianza o túnel SSH. |
 
 ---
 

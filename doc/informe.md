@@ -47,7 +47,7 @@ Cliente → [TCP connect a 1080]
 Tipos de dirección soportados:
 - `ATYP=0x01` (IPv4): connect directo.
 - `ATYP=0x04` (IPv6): connect directo.
-- `ATYP=0x03` (FQDN): resolución mediante un worker joinable que conserva una referencia propia,
+- `ATYP=0x03` (FQDN): resolución mediante un worker que conserva una referencia propia,
   publica el resultado de forma sincronizada y permite iterar las IPs obtenidas (RF4).
 
 Solo se soporta el comando `CONNECT` (0x01). `BIND` y `UDP ASSOCIATE` retornan reply `0x07`
@@ -160,7 +160,7 @@ ejecutar muchos comandos seguidos. Se documentó como limitación en la SPEC.
 
 `getaddrinfo()` se ejecuta fuera del event loop para no bloquear el resto del servidor. El worker
 DNS conserva una referencia sobre la conexión y publica únicamente resultado y status bajo mutex;
-el thread principal consume esa publicación y continúa con `CONNECT`. Los workers son joinables y
+el thread principal consume este resultado y continúa con `CONNECT`. Los workers son joinables y
 el apagado espera los que sigan en vuelo antes de destruir el selector o los pools. Si falla la
 notificación al selector, el loop principal detecta y reintenta el resultado pendiente.
 
@@ -211,7 +211,7 @@ El protocolo de monitoreo MNG/1 es un protocolo binario completo con handshake d
 autenticación propia, sesión multi-comando y 7 operaciones de administración. Su integración en el
 mismo event loop que SOCKS5 evita threads adicionales y la complejidad de sincronización asociada.
 
-El punto de diseño más delicado fue la gestión del ciclo de vida de los file descriptors:
+Lo más difícil fue manejar el ciclo de vida de los file descriptors:
 garantizar que un fd no se use después de que su struct fue reciclada al pool, y que el buffer de
 escritura quede siempre vaciado antes de cerrar, requirió atención a los casos borde del event loop.
 
@@ -388,7 +388,6 @@ Opciones:
   -L <dirección>   Dirección bind monitoreo (default: 127.0.0.1)
   -u <user:pass>   Usuario SOCKS5 (repetible, máx. 10)
   -A <user:pass>   Credencial de administrador (canal de monitoreo)
-  -N               Deshabilita disectores
   -v               Versión
   -h               Ayuda
 ```

@@ -41,7 +41,6 @@ curl --proxy socks5://alice:secret@127.0.0.1:1080 http://example.com
 | `-L ADDR` | Dirección bind monitoreo | 127.0.0.1 |
 | `-u USER:PASS` | Usuario SOCKS5 (repetible, máx. 10) | — |
 | `-A USER:PASS` | Credencial de administrador | — |
-| `-N` | Deshabilita disectores | — |
 | `-v` | Versión | — |
 | `-h` | Ayuda | — |
 
@@ -67,7 +66,7 @@ Flags del cliente: `-L ADDR` (default 127.0.0.1), `-P PUERTO` (default 8080), `-
 .
 ├── Makefile
 ├── doc/
-│   ├── informe.md     # informe final (11 secciones)
+│   ├── informe.md     # informe final
 │   ├── SPEC.md        # especificación del protocolo MNG/1 (estilo RFC)
 │   ├── DECISIONS.md   # decisiones de diseño y justificaciones
 │   └── DESIGN.md      # arquitectura y máquinas de estados
@@ -79,7 +78,7 @@ Flags del cliente: `-L ADDR` (default 127.0.0.1), `-P PUERTO` (default 8080), `-
 
 ## Documentación
 
-- `doc/informe.md` — informe final con las 11 secciones de la cátedra.
+- `doc/informe.md` — informe final.
 - `doc/SPEC.md` — especificación completa del protocolo de monitoreo MNG/1.
 - `doc/DECISIONS.md` — decisiones de diseño y justificaciones.
 - `doc/DESIGN.md` — arquitectura, máquinas de estados y canal de monitoreo.

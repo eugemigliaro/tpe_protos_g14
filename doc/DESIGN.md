@@ -7,7 +7,7 @@ Arquitectura de la aplicación y de sus máquinas de estados.
 Event loop **no bloqueante en un solo thread**: un socket pasivo SOCKS5 y, por cada cliente, dos
 file descriptors (cliente y origin) multiplexados con el `selector` de la cátedra. Cada conexión
 tiene su propio estado (`struct socks5`) y una máquina de estados (`stm`). La resolución de nombres
-es la única tarea que se descarga a un thread aparte (lo permite la consigna).
+es la única tarea que se delega en un thread aparte (lo permite la consigna).
 
 Separación de responsabilidades por archivo:
 
@@ -138,7 +138,7 @@ está completamente consumido.
 
 ### Parsers (byte a byte)
 
-Ambos parsers son STM hand-rolled sin allocaciones; avanzan byte a byte sobre el `buffer` de entrada:
+Ambos parsers son STM sin allocaciones dinámicas; avanzan byte a byte sobre el `buffer` de entrada:
 
 **`auth_feed()`** — STM interno:
 ```
@@ -175,7 +175,7 @@ Las métricas se guardan en variables globales en `metrics.c`:
 - `bytes_sent` / `bytes_recv` (`uint64_t`): bytes transferidos en el relay.
 
 El access log (`access_log.c`) escribe una línea por conexión exitosa al archivo `socks5_access.log`
-(en el directorio de trabajo). Un búfer circular en RAM retiene las últimas 100 entradas para `GET_LOG`.
+(en el directorio de trabajo). Un buffer circular en RAM retiene las últimas 100 entradas para `GET_LOG`.
 
 ### Cliente de monitoreo (`src/client/client.c`)
 
