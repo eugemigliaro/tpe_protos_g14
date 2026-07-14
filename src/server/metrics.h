@@ -19,11 +19,11 @@ struct metrics_snapshot {
     uint64_t bytes_recv;        /* bytes recibidos de los clientes SOCKS5       */
 };
 
-void                    metrics_init(void);
-void                    metrics_conn_open(void);
-void                    metrics_conn_close(void);
-void                    metrics_add_bytes_sent(size_t n);
-void                    metrics_add_bytes_recv(size_t n);
+void metrics_init(void);
+void metrics_conn_open(void);
+void metrics_conn_close(void);
+void metrics_add_bytes_sent(size_t n);
+void metrics_add_bytes_recv(size_t n);
 struct metrics_snapshot metrics_get(void);
 
 #endif
