@@ -70,18 +70,47 @@ relay_on_read_ready(struct selector_key *key)
     buffer *b = from_client ? &s->read_buffer : &s->write_buffer;
     const int peer = from_client ? s->origin_fd : s->client_fd;
 
-    size_t space;
-    uint8_t *ptr = buffer_write_ptr(b, &space);
-    const ssize_t n = recv(key->fd, ptr, space, 0);
-    if (n > 0) {
-        buffer_write_adv(b, n);
-        /* RF6: contabilizar bytes según dirección del flujo. */
-        if (from_client) {
-            metrics_add_bytes_recv((size_t)n);
-        } else {
-            metrics_add_bytes_sent((size_t)n);
+    /* Acumular todo lo disponible en el socket (loop hasta EAGAIN). */
+    bool got_eof = false;
+    for (;;) {
+        size_t space;
+        uint8_t *ptr = buffer_write_ptr(b, &space);
+        if (space == 0) {
+            break; /* buffer lleno */
         }
-    } else if (n == 0) {
+        const ssize_t n = recv(key->fd, ptr, space, 0);
+        if (n > 0) {
+            buffer_write_adv(b, n);
+            /* RF6: contabilizar bytes según dirección del flujo. */
+            if (from_client) {
+                metrics_add_bytes_recv((size_t)n);
+            } else {
+                metrics_add_bytes_sent((size_t)n);
+            }
+        } else if (n == 0) {
+            got_eof = true;
+            break;
+        } else {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break; /* no hay más datos por ahora */
+            }
+            return ERROR;
+        }
+    }
+
+    /* Intentar enviar inmediatamente al peer sin volver al selector. */
+    if (buffer_can_read(b)) {
+        size_t count;
+        uint8_t *ptr = buffer_read_ptr(b, &count);
+        const ssize_t w = send(peer, ptr, count, MSG_NOSIGNAL);
+        if (w > 0) {
+            buffer_read_adv(b, w);
+        } else if (w == -1 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            return ERROR;
+        }
+    }
+
+    if (got_eof) {
         if (from_client) {
             s->client_closed = true;
         } else {
@@ -89,10 +118,8 @@ relay_on_read_ready(struct selector_key *key)
         }
         shutdown(key->fd, SHUT_RD);
         if (!buffer_can_read(b)) {
-            shutdown(peer, SHUT_WR); /* nada pendiente: cerrar ya el otro write */
+            shutdown(peer, SHUT_WR);
         }
-    } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-        return ERROR;
     }
 
     if (relay_finished(s)) {
